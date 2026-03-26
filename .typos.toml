@@ -2,6 +2,10 @@
 [default.extend-words]
 moond4rk = "moond4rk"
 Decrypter = "Decrypter"
+# 3DES-EDE (Encrypt-Decrypt-Encrypt) is the correct cryptographic term
+EDE = "EDE"
+# "alis" is an Apple CSSM attribute name for Alias
+alis = "alis"
 
 [files]
 extend-exclude = ["go.mod", "go.sum"]
