@@ -1,0 +1,69 @@
+# .github/workflows/ci.yml
+# This workflow runs the primary CI pipeline for the Go project.
+name: Go CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  checks:
+    name: Code Quality Checks
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Format Check
+        run: |
+          diff -u <(echo -n) <(gofmt -d .)
+
+      - name: Check spelling
+        uses: crate-ci/typos@master
+        with:
+          config: ./.typos.toml
+
+      - name: Run Linter
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.10
+
+  test:
+    name: Test & Build (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Go Build
+        run: go build -v ./...
+
+      - name: Run Tests
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v5
+        with:
+          use_oidc: true
+          files: ./coverage.out
+          fail_ci_if_error: false
+          flags: unittests

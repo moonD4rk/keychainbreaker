@@ -1,0 +1,39 @@
+# codecov.yml - Codecov Configuration
+# Purpose: Visualization + PR comments + trending, but NO enforced CI requirements
+
+coverage:
+  # Coverage display precision
+  precision: 2      # Show 2 decimal places, e.g., 85.42%
+  round: down       # Round down, e.g., 85.99% -> 85.99%
+  range: 70..100    # Color range: 70% (red) -> 100% (green)
+
+  # Coverage status configuration (informational only, won't block CI)
+  status:
+    project:
+      default:
+        target: auto          # Auto target: compare with previous commit
+        informational: true   # Informational only: won't fail CI
+
+    patch:
+      default:
+        target: auto          # Auto target: compare new code with project average
+        informational: true   # Informational only: won't fail CI
+
+# Paths excluded from coverage calculation
+ignore:
+  - "testdata/**/*"       # Test fixtures
+
+# PR comment configuration - Show detailed coverage information in PRs
+comment:
+  require_changes: false        # Show comment even if coverage hasn't changed
+  layout: "reach,diff,flags,files,footer"
+  behavior: default             # Update existing comment
+  require_base: false           # Don't require base branch data
+  require_head: true            # Require current branch data
+
+# Flags configuration - Categorize different types of tests
+flags:
+  unittests:
+    paths:
+      - "*.go"                  # Root level library code
+    carryforward: false         # Don't use previous coverage data
