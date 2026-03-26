@@ -1,0 +1,142 @@
+# golangci-lint v2 configuration
+# Compatible with Go 1.20
+# Stricter than HackBrowserData — no legacy code to accommodate
+version: "2"
+
+run:
+  go: "1.20"
+  timeout: "5m"
+  allow-parallel-runners: true
+
+linters:
+  default: none
+  enable:
+    # Default tier
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+
+    # Bug detection
+    - errorlint
+    - gosec
+
+    # Code quality
+    - depguard
+    - dogsled
+    - dupl
+    - errname
+    - funlen
+    - gocheckcompilerdirectives
+    - gochecknoinits
+    - goconst
+    - gocritic
+    - godox
+    - goprintffuncname
+    - lll
+    - misspell
+    - nakedret
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - whitespace
+
+    # Complexity
+    - gocognit
+
+    # Note: copyloopvar, intrange, modernize, perfsprint require Go 1.22+
+    # They will be enabled when Go version constraint is lifted
+
+  settings:
+    depguard:
+      rules:
+        blocked:
+          deny:
+            - pkg: "github.com/pkg/errors"
+              desc: Use fmt.Errorf with %w or errors stdlib instead.
+            - pkg: "io/ioutil"
+              desc: Deprecated since Go 1.16. Use io and os packages instead.
+    dupl:
+      threshold: 100
+    funlen:
+      lines: -1
+      statements: 50
+    goconst:
+      min-len: 2
+      min-occurrences: 3
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+      disabled-checks:
+        - dupImport
+        - ifElseChain
+        - octalLiteral
+        - whyNoLint
+        - singleCaseSwitch
+        - exitAfterDefer
+    gocognit:
+      min-complexity: 30
+    godox:
+      keywords:
+        - FIXME
+    govet:
+      enable:
+        - nilness
+        - shadow
+    errorlint:
+      asserts: false
+    errcheck:
+      check-type-assertions: true
+    gosec:
+      excludes:
+        # Required: keychain format uses Triple-DES (weak crypto by modern standards)
+        - G101
+        - G401
+        - G405
+        - G501
+        - G502
+        - G505
+        # Integer overflow: binary parsing has many uint32 -> int conversions
+        - G115
+    lll:
+      line-length: 140
+    misspell:
+      locale: US
+    revive:
+      rules:
+        - name: indent-error-flow
+        - name: unexported-return
+          disabled: true
+        - name: unused-parameter
+        - name: unused-receiver
+          disabled: true
+
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+      - legacy
+    rules:
+      - path: _test\.go
+        linters:
+          - dupl
+          - funlen
+          - lll
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      extra-rules: true
+    goimports:
+      local-prefixes:
+        - github.com/moond4rk/go-chainbreaker

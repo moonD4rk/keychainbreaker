@@ -1,0 +1,36 @@
+# Ignore everything by default (whitelist approach).
+*
+
+# Allow git to traverse directories
+!*/
+
+# === Source code ===
+!*.go
+!go.mod
+!go.sum
+
+# === Project root config ===
+!.gitignore
+!.golangci.yml
+!.typos.toml
+!.codecov.yml
+!CLAUDE.md
+!LICENSE
+
+# === Documentation ===
+!README.md
+
+# === GitHub ===
+!.github/workflows/*.yml
+
+# === RFCs ===
+!rfcs/*.md
+
+# === Test fixtures ===
+!testdata/*.keychain-db
+
+# === Always ignore (override !*/) ===
+.git/
+.idea/
+.vscode/
+.DS_Store
