@@ -8,10 +8,10 @@ A Go library for parsing and decrypting macOS Keychain files (`login.keychain-db
 ## Features
 
 - Parse macOS Keychain binary format with dynamic schema discovery
-- Decrypt generic passwords, internet passwords, and private keys
-- Multiple unlock methods: hex key, password (PBKDF2), SystemKey file
+- Decrypt generic passwords
+- Multiple unlock methods: password (PBKDF2) or hex-encoded master key
 - Export password hash for offline cracking (hashcat / John the Ripper)
-- Zero external dependencies (standard library only, except testify for tests)
+- Zero external dependencies (standard library only)
 - Compatible with Go 1.20+
 
 ## Install
@@ -33,29 +33,23 @@ import (
 )
 
 func main() {
-	// Open a keychain file
 	kc, err := keychainbreaker.Open("/path/to/login.keychain-db")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Unlock with a hex-encoded master key
-	err = kc.Unlock(keychainbreaker.WithKey("your-hex-key-here"))
-	if err != nil {
+	// Unlock with password
+	if err := kc.Unlock(keychainbreaker.WithPassword("your-keychain-password")); err != nil {
 		log.Fatal(err)
 	}
 
-	// Extract generic passwords
 	passwords, err := kc.GenericPasswords()
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	for _, p := range passwords {
-		fmt.Printf("Service: %s\n", p.Service)
-		fmt.Printf("Account: %s\n", p.Account)
-		fmt.Printf("Password: %s\n", p.Password)
-		fmt.Println()
+		fmt.Printf("Service: %s, Account: %s, Password: %s\n", p.Service, p.Account, p.Password)
 	}
 }
 ```
@@ -72,7 +66,11 @@ kc, err := keychainbreaker.OpenBytes(buf)
 ### Unlock
 
 ```go
-err = kc.Unlock(keychainbreaker.WithKey("hex-encoded-24-byte-master-key"))
+// With keychain password (PBKDF2-HMAC-SHA1 derivation)
+err = kc.Unlock(keychainbreaker.WithPassword("password"))
+
+// With hex-encoded 24-byte master key (from memory forensics)
+err = kc.Unlock(keychainbreaker.WithKey("hex-key"))
 ```
 
 ### Extract Records
@@ -84,7 +82,7 @@ passwords, err := kc.GenericPasswords()
 ### Password Hash Export
 
 ```go
-hash := kc.PasswordHash() // $keychain$*<salt>*<iv>*<ciphertext>
+hash, err := kc.PasswordHash() // $keychain$*<salt>*<iv>*<ciphertext>
 ```
 
 ## License

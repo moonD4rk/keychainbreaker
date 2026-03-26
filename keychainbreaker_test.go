@@ -9,9 +9,15 @@ import (
 
 const testKeychainPath = "./testdata/test.keychain-db"
 
-func TestOpen(t *testing.T) {
+func openTestKeychain(t *testing.T) *Keychain {
+	t.Helper()
 	kc, err := Open(testKeychainPath)
 	require.NoError(t, err)
+	return kc
+}
+
+func TestOpen(t *testing.T) {
+	kc := openTestKeychain(t)
 	assert.Equal(t, "kych", string(kc.header.signature[:]))
 	assert.NotNil(t, kc.schema)
 	assert.NotEmpty(t, kc.tables)
@@ -29,33 +35,25 @@ func TestOpenTruncatedFile(t *testing.T) {
 }
 
 func TestExtractBeforeUnlock(t *testing.T) {
-	kc, err := Open(testKeychainPath)
-	require.NoError(t, err)
-
-	_, err = kc.GenericPasswords()
+	kc := openTestKeychain(t)
+	_, err := kc.GenericPasswords()
 	assert.ErrorIs(t, err, ErrLocked)
 }
 
 func TestUnlockWrongKey(t *testing.T) {
-	kc, err := Open(testKeychainPath)
-	require.NoError(t, err)
-
-	err = kc.Unlock(WithKey("000000000000000000000000000000000000000000000000"))
+	kc := openTestKeychain(t)
+	err := kc.Unlock(WithKey("000000000000000000000000000000000000000000000000"))
 	assert.Error(t, err)
 }
 
 func TestUnlockWrongPassword(t *testing.T) {
-	kc, err := Open(testKeychainPath)
-	require.NoError(t, err)
-
-	err = kc.Unlock(WithPassword("wrong-password"))
+	kc := openTestKeychain(t)
+	err := kc.Unlock(WithPassword("wrong-password"))
 	assert.Error(t, err)
 }
 
 func TestPasswordHash(t *testing.T) {
-	kc, err := Open(testKeychainPath)
-	require.NoError(t, err)
-
+	kc := openTestKeychain(t)
 	hash, err := kc.PasswordHash()
 	require.NoError(t, err)
 	assert.NotEmpty(t, hash)
@@ -69,22 +67,14 @@ const (
 )
 
 func TestGenericPasswordsWithKey(t *testing.T) {
-	kc, err := Open(testKeychainPath)
-	require.NoError(t, err)
-
-	err = kc.Unlock(WithKey(testMasterKeyHex))
-	require.NoError(t, err)
-
+	kc := openTestKeychain(t)
+	require.NoError(t, kc.Unlock(WithKey(testMasterKeyHex)))
 	assertGenericPasswords(t, kc)
 }
 
 func TestGenericPasswordsWithPassword(t *testing.T) {
-	kc, err := Open(testKeychainPath)
-	require.NoError(t, err)
-
-	err = kc.Unlock(WithPassword(testPassword))
-	require.NoError(t, err)
-
+	kc := openTestKeychain(t)
+	require.NoError(t, kc.Unlock(WithPassword(testPassword)))
 	assertGenericPasswords(t, kc)
 }
 
@@ -114,9 +104,7 @@ func assertGenericPasswords(t *testing.T, kc *Keychain) {
 }
 
 func TestDynamicSchema(t *testing.T) {
-	kc, err := Open(testKeychainPath)
-	require.NoError(t, err)
-
+	kc := openTestKeychain(t)
 	gpSchema := kc.schema.forTable(tableGenericPassword)
 	require.NotNil(t, gpSchema)
 

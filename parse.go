@@ -86,13 +86,8 @@ func parseSchema(buf []byte, offset uint32) (applDBSchema, []uint32, error) {
 
 // tableInfo holds a parsed table header and its record offsets.
 type tableInfo struct {
-	tableSize     uint32
 	tableID       uint32
 	recordCount   uint32
-	records       uint32
-	indexesOffset uint32
-	freeListHead  uint32
-	totalRowCount uint32
 	recordOffsets []uint32
 	baseOffset    int // absolute offset of this table in the buffer
 }
@@ -103,14 +98,9 @@ func parseTable(buf []byte, offset int) (tableInfo, error) {
 	}
 	data := buf[offset : offset+tableHeaderLen]
 	t := tableInfo{
-		tableSize:     binary.BigEndian.Uint32(data[0:4]),
-		tableID:       binary.BigEndian.Uint32(data[4:8]),
-		recordCount:   binary.BigEndian.Uint32(data[8:12]),
-		records:       binary.BigEndian.Uint32(data[12:16]),
-		indexesOffset: binary.BigEndian.Uint32(data[16:20]),
-		freeListHead:  binary.BigEndian.Uint32(data[20:24]),
-		totalRowCount: binary.BigEndian.Uint32(data[24:28]),
-		baseOffset:    offset,
+		tableID:     binary.BigEndian.Uint32(data[4:8]),
+		recordCount: binary.BigEndian.Uint32(data[8:12]),
+		baseOffset:  offset,
 	}
 	recBase := offset + tableHeaderLen
 	for i := 0; i < int(t.recordCount); i++ {

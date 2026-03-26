@@ -11,10 +11,9 @@ import (
 )
 
 const (
-	blockSize     = 8
-	keyLength     = 24
-	pbkdf2Iter    = 1000
-	pbkdf2SaltLen = 20
+	blockSize  = 8
+	keyLength  = 24
+	pbkdf2Iter = 1000
 )
 
 // magicCMSIV is the fixed IV used by Apple's CMS key wrapping (RFC 3217).
