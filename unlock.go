@@ -107,16 +107,16 @@ func (kc *Keychain) generateKeyList() error {
 
 	for _, recOffset := range symTable.recordOffsets {
 		absOffset := symTable.baseOffset + int(recOffset)
-		rec, recErr := parseRecord(kc.buf, absOffset, schema)
-		if recErr != nil {
+		rec, err := parseRecord(kc.buf, absOffset, schema)
+		if err != nil {
 			continue
 		}
-		index, ciphertext, iv, extractErr := extractKeyBlob(rec)
-		if extractErr != nil {
+		index, ciphertext, iv, err := extractKeyBlob(rec)
+		if err != nil {
 			continue
 		}
-		key, decryptErr := keyblobDecrypt(ciphertext, iv, kc.dbKey)
-		if decryptErr != nil || len(key) == 0 {
+		key, err := keyblobDecrypt(ciphertext, iv, kc.dbKey)
+		if err != nil || len(key) == 0 {
 			continue
 		}
 		kc.keyList[string(index)] = key

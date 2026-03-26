@@ -56,7 +56,8 @@ func TestPasswordHash(t *testing.T) {
 	kc, err := Open(testKeychainPath)
 	require.NoError(t, err)
 
-	hash := kc.PasswordHash()
+	hash, err := kc.PasswordHash()
+	require.NoError(t, err)
 	assert.NotEmpty(t, hash)
 	assert.Contains(t, hash, "$keychain$*")
 }

@@ -139,10 +139,12 @@ func (kc *Keychain) parseGenericPassword(offset int, schema *tableSchema) (Gener
 		return GenericPassword{}, err
 	}
 
+	password, _ := kc.decryptBlob(rec) // password is nil if decryption fails
+
 	return GenericPassword{
 		Service:     rec.stringAttr("svce"),
 		Account:     rec.stringAttr("acct"),
-		Password:    kc.decryptBlob(rec),
+		Password:    password,
 		Description: rec.stringAttr("desc"),
 		Comment:     rec.stringAttr("icmt"),
 		Creator:     rec.fourCharAttr("crtr"),
@@ -155,18 +157,20 @@ func (kc *Keychain) parseGenericPassword(offset int, schema *tableSchema) (Gener
 }
 
 // decryptBlob decrypts the SSGP blob area of a password record.
-// Returns nil if the blob cannot be decrypted (missing key, empty data, etc.).
-func (kc *Keychain) decryptBlob(rec *record) []byte {
+func (kc *Keychain) decryptBlob(rec *record) ([]byte, error) {
 	if len(rec.blobData) < ssgpHeaderLen {
-		return nil
+		return nil, fmt.Errorf("blob too small: %d < %d", len(rec.blobData), ssgpHeaderLen)
 	}
 
 	block, err := parseSSGP(rec.blobData)
-	if err != nil || string(block.magic) != secureStorageGroup {
-		return nil
+	if err != nil {
+		return nil, fmt.Errorf("parse SSGP: %w", err)
+	}
+	if string(block.magic) != secureStorageGroup {
+		return nil, fmt.Errorf("invalid SSGP magic: %q", block.magic)
 	}
 	if len(block.encryptedPassword) == 0 {
-		return nil
+		return nil, nil // no encrypted data present (header-only SSGP)
 	}
 
 	keyIndex := make([]byte, 0, len(block.magic)+len(block.label))
@@ -174,26 +178,26 @@ func (kc *Keychain) decryptBlob(rec *record) []byte {
 	keyIndex = append(keyIndex, block.label...)
 	dbkey, ok := kc.keyList[string(keyIndex)]
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("no matching key for SSGP label")
 	}
 
 	plain, err := kcDecrypt(dbkey, block.iv, block.encryptedPassword)
-	if err != nil || len(plain) == 0 {
-		return nil
+	if err != nil {
+		return nil, fmt.Errorf("decrypt password: %w", err)
 	}
-	return plain
+	return plain, nil
 }
 
 // PasswordHash exports the keychain password hash for offline cracking.
 // Format: $keychain$*<salt_hex>*<iv_hex>*<ciphertext_hex>
 // Compatible with hashcat mode 23100 and John the Ripper.
 // Does not require Unlock.
-func (kc *Keychain) PasswordHash() string {
+func (kc *Keychain) PasswordHash() (string, error) {
 	start := kc.blobBaseAddr + int(kc.dbBlob.startCryptoBlob)
 	end := kc.blobBaseAddr + int(kc.dbBlob.totalLength)
 	if start >= end || end > len(kc.buf) {
-		return ""
+		return "", fmt.Errorf("encrypted db key bounds invalid: [%d:%d] in buffer of %d", start, end, len(kc.buf))
 	}
 	encryptedDBKey := kc.buf[start:end]
-	return fmt.Sprintf("$keychain$*%x*%x*%x", kc.dbBlob.salt, kc.dbBlob.iv, encryptedDBKey)
+	return fmt.Sprintf("$keychain$*%x*%x*%x", kc.dbBlob.salt, kc.dbBlob.iv, encryptedDBKey), nil
 }
