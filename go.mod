@@ -1,3 +1,3 @@
-module github.com/moond4rk/go-chainbreaker
+module github.com/moond4rk/keychainbreaker
 
 go 1.20

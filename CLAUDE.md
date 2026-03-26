@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**go-chainbreaker** is a Go library for parsing and decrypting macOS Keychain files (`login.keychain-db`). It provides programmatic access to extract stored credentials from macOS Keychain database files.
+**keychainbreaker** is a Go library for parsing and decrypting macOS Keychain files (`login.keychain-db`). It provides programmatic access to extract stored credentials from macOS Keychain database files.
 
 The library uses only Go standard library (zero external dependencies).
 
@@ -23,7 +23,7 @@ go test -v -race ./...                     # Run tests with race detection
 go test -cover ./...                       # Run tests with coverage
 golangci-lint run                          # Run linter
 gofumpt -l -w .                            # Format (stricter than gofmt)
-goimports -w -local github.com/moond4rk/go-chainbreaker . # Format imports
+goimports -w -local github.com/moond4rk/keychainbreaker . # Format imports
 go build ./...                             # Build
 ```
 
