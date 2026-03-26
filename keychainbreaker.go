@@ -6,15 +6,20 @@ import (
 	"os"
 )
 
+// metadataOffsetAdjustment is the fixed offset from the Metadata table base
+// to the DBBlob structure within the keychain file.
+const metadataOffsetAdjustment = 0x38
+
 // Keychain represents a parsed macOS keychain file.
 type Keychain struct {
-	buf     []byte
-	header  applDBHeader
-	schema  *dbSchema
-	tables  map[uint32]*tableInfo
-	dbBlob  dbBlob
-	dbKey   []byte            // 24-byte database key (nil when locked)
-	keyList map[string][]byte // SSGP label -> per-record key (nil when locked)
+	buf          []byte
+	header       applDBHeader
+	schema       *dbSchema
+	tables       map[uint32]*tableInfo
+	dbBlob       dbBlob
+	blobBaseAddr int               // absolute offset of the DBBlob in buf
+	dbKey        []byte            // 24-byte database key (nil when locked)
+	keyList      map[string][]byte // SSGP label -> per-record key (nil when locked)
 }
 
 // Open reads and parses a keychain file from disk.
@@ -86,12 +91,12 @@ func (kc *Keychain) extractDBBlob() error {
 		return fmt.Errorf("metadata table not found")
 	}
 
-	blobOffset := metaTable.baseOffset + 0x38
-	if blobOffset+dbBlobSize > len(kc.buf) {
+	kc.blobBaseAddr = metaTable.baseOffset + metadataOffsetAdjustment
+	if kc.blobBaseAddr+dbBlobSize > len(kc.buf) {
 		return fmt.Errorf("db blob exceeds file size")
 	}
 
-	blob, err := parseDBBlob(kc.buf[blobOffset : blobOffset+dbBlobSize])
+	blob, err := parseDBBlob(kc.buf[kc.blobBaseAddr : kc.blobBaseAddr+dbBlobSize])
 	if err != nil {
 		return err
 	}
@@ -134,12 +139,10 @@ func (kc *Keychain) parseGenericPassword(offset int, schema *tableSchema) (Gener
 		return GenericPassword{}, err
 	}
 
-	password := kc.decryptRecordPassword(rec)
-
 	return GenericPassword{
 		Service:     rec.stringAttr("svce"),
 		Account:     rec.stringAttr("acct"),
-		Password:    password,
+		Password:    kc.decryptBlob(rec),
 		Description: rec.stringAttr("desc"),
 		Comment:     rec.stringAttr("icmt"),
 		Creator:     rec.fourCharAttr("crtr"),
@@ -151,16 +154,15 @@ func (kc *Keychain) parseGenericPassword(offset int, schema *tableSchema) (Gener
 	}, nil
 }
 
-func (kc *Keychain) decryptRecordPassword(rec *record) []byte {
+// decryptBlob decrypts the SSGP blob area of a password record.
+// Returns nil if the blob cannot be decrypted (missing key, empty data, etc.).
+func (kc *Keychain) decryptBlob(rec *record) []byte {
 	if len(rec.blobData) < ssgpHeaderLen {
 		return nil
 	}
 
 	block, err := parseSSGP(rec.blobData)
-	if err != nil {
-		return nil
-	}
-	if string(block.magic) != secureStorageGroup {
+	if err != nil || string(block.magic) != secureStorageGroup {
 		return nil
 	}
 	if len(block.encryptedPassword) == 0 {
@@ -170,7 +172,6 @@ func (kc *Keychain) decryptRecordPassword(rec *record) []byte {
 	keyIndex := make([]byte, 0, len(block.magic)+len(block.label))
 	keyIndex = append(keyIndex, block.magic...)
 	keyIndex = append(keyIndex, block.label...)
-
 	dbkey, ok := kc.keyList[string(keyIndex)]
 	if !ok {
 		return nil
@@ -188,13 +189,8 @@ func (kc *Keychain) decryptRecordPassword(rec *record) []byte {
 // Compatible with hashcat mode 23100 and John the Ripper.
 // Does not require Unlock.
 func (kc *Keychain) PasswordHash() string {
-	metaTable, ok := kc.tables[tableMetadata]
-	if !ok {
-		return ""
-	}
-	blobOffset := metaTable.baseOffset + 0x38
-	start := blobOffset + int(kc.dbBlob.startCryptoBlob)
-	end := blobOffset + int(kc.dbBlob.totalLength)
+	start := kc.blobBaseAddr + int(kc.dbBlob.startCryptoBlob)
+	end := kc.blobBaseAddr + int(kc.dbBlob.totalLength)
 	if start >= end || end > len(kc.buf) {
 		return ""
 	}

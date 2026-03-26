@@ -1,7 +1,6 @@
 package keychainbreaker
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -27,7 +26,7 @@ func (kc *Keychain) Unlock(opt UnlockOption) error {
 	var cfg unlockConfig
 	opt(&cfg)
 
-	masterKey, err := deriveMasterKey(&cfg, kc)
+	masterKey, err := deriveMasterKey(&cfg)
 	if err != nil {
 		return err
 	}
@@ -45,7 +44,7 @@ func (kc *Keychain) Unlock(opt UnlockOption) error {
 	return nil
 }
 
-func deriveMasterKey(cfg *unlockConfig, _ *Keychain) ([]byte, error) {
+func deriveMasterKey(cfg *unlockConfig) ([]byte, error) {
 	if cfg.hexKey != "" {
 		return decodeHexKey(cfg.hexKey)
 	}
@@ -66,18 +65,8 @@ func decodeHexKey(hexKey string) ([]byte, error) {
 }
 
 func (kc *Keychain) findWrappingKey(master []byte) ([]byte, error) {
-	metaTable := kc.tables[tableMetadata]
-	if metaTable == nil {
-		return nil, fmt.Errorf("metadata table not found")
-	}
-
-	blobOffset := metaTable.baseOffset + 0x38
-	if blobOffset+dbBlobSize > len(kc.buf) {
-		return nil, fmt.Errorf("db blob exceeds file size")
-	}
-
-	start := blobOffset + int(kc.dbBlob.startCryptoBlob)
-	end := blobOffset + int(kc.dbBlob.totalLength)
+	start := kc.blobBaseAddr + int(kc.dbBlob.startCryptoBlob)
+	end := kc.blobBaseAddr + int(kc.dbBlob.totalLength)
 	if start < 0 || end > len(kc.buf) || start >= end {
 		return nil, fmt.Errorf("db blob cipher bounds invalid")
 	}
@@ -105,12 +94,16 @@ func (kc *Keychain) generateKeyList() error {
 
 	for _, recOffset := range symTable.recordOffsets {
 		absOffset := symTable.baseOffset + int(recOffset)
-		index, ciphertext, iv, err := kc.parseKeyblobRecord(absOffset, schema)
-		if err != nil {
+		rec, recErr := parseRecord(kc.buf, absOffset, schema)
+		if recErr != nil {
 			continue
 		}
-		key, err := keyblobDecrypt(ciphertext, iv, kc.dbKey)
-		if err != nil || len(key) == 0 {
+		index, ciphertext, iv, extractErr := extractKeyBlob(rec)
+		if extractErr != nil {
+			continue
+		}
+		key, decryptErr := keyblobDecrypt(ciphertext, iv, kc.dbKey)
+		if decryptErr != nil || len(key) == 0 {
 			continue
 		}
 		kc.keyList[string(index)] = key
@@ -122,26 +115,16 @@ func (kc *Keychain) generateKeyList() error {
 	return nil
 }
 
-const keyBlobRecordHeaderLen = 132
-
-func (kc *Keychain) parseKeyblobRecord(offset int, _ *tableSchema) (index, ciphertext, iv []byte, err error) {
-	if offset+keyBlobRecordHeaderLen > len(kc.buf) {
-		return nil, nil, nil, fmt.Errorf("keyblob header exceeds file size")
-	}
-
-	recSize := int(binary.BigEndian.Uint32(kc.buf[offset : offset+4]))
-	recordStart := offset + keyBlobRecordHeaderLen
-	recordEnd := offset + recSize
-	if recordEnd > len(kc.buf) || recordStart >= recordEnd {
-		return nil, nil, nil, fmt.Errorf("keyblob record exceeds file size")
-	}
-
-	recData := kc.buf[recordStart:recordEnd]
-	if len(recData) < keyBlobLen {
+// extractKeyBlob extracts the key material from a SymmetricKey record.
+// The keyblob data spans the entire payload after the record header
+// (not just the blob area), so we use rec.rawPayload.
+func extractKeyBlob(rec *record) (index, ciphertext, iv []byte, err error) {
+	data := rec.rawPayload
+	if len(data) < keyBlobLen {
 		return nil, nil, nil, fmt.Errorf("keyblob structure incomplete")
 	}
 
-	blob, err := parseKeyBlob(recData[:keyBlobLen])
+	blob, err := parseKeyBlob(data[:keyBlobLen])
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -150,26 +133,26 @@ func (kc *Keychain) parseKeyblobRecord(offset int, _ *tableSchema) (index, ciphe
 	}
 
 	ssgpOffset := int(blob.totalLength) + 8
-	if ssgpOffset+4 > len(recData) {
+	if ssgpOffset+4 > len(data) {
 		return nil, nil, nil, fmt.Errorf("ssgp check exceeds record")
 	}
-	if string(recData[ssgpOffset:ssgpOffset+4]) != secureStorageGroup {
+	if string(data[ssgpOffset:ssgpOffset+4]) != secureStorageGroup {
 		return nil, nil, nil, fmt.Errorf("keyblob not part of secure storage group")
 	}
 
 	cipherStart := int(blob.startCryptoBlob)
 	cipherEnd := int(blob.totalLength)
-	if cipherEnd > len(recData) || cipherStart >= cipherEnd {
+	if cipherEnd > len(data) || cipherStart >= cipherEnd {
 		return nil, nil, nil, fmt.Errorf("invalid cipher bounds")
 	}
-	ciphertext = append([]byte{}, recData[cipherStart:cipherEnd]...)
+	ciphertext = append([]byte{}, data[cipherStart:cipherEnd]...)
 
 	indexStart := ssgpOffset
 	indexEnd := indexStart + 20
-	if indexEnd > len(recData) {
+	if indexEnd > len(data) {
 		return nil, nil, nil, fmt.Errorf("key index exceeds record length")
 	}
-	index = append([]byte{}, recData[indexStart:indexEnd]...)
+	index = append([]byte{}, data[indexStart:indexEnd]...)
 	iv = append([]byte{}, blob.iv...)
 
 	return index, ciphertext, iv, nil

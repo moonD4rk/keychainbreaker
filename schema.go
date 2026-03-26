@@ -23,18 +23,24 @@ type attrDef struct {
 
 // tableSchema describes the attributes for a specific table type.
 type tableSchema struct {
-	tableID uint32
-	attrs   []attrDef
+	tableID  uint32
+	attrs    []attrDef
+	indexMap map[string]int // name -> index cache, built lazily
 }
 
 // attrIndex returns the index of the named attribute, or -1 if not found.
 func (ts *tableSchema) attrIndex(name string) int {
-	for i, a := range ts.attrs {
-		if a.name == name {
-			return i
+	if ts.indexMap == nil {
+		ts.indexMap = make(map[string]int, len(ts.attrs))
+		for i, a := range ts.attrs {
+			ts.indexMap[a.name] = i
 		}
 	}
-	return -1
+	idx, ok := ts.indexMap[name]
+	if !ok {
+		return -1
+	}
+	return idx
 }
 
 // dbSchema holds schemas for all discovered tables.
