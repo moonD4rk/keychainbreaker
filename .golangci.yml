@@ -38,6 +38,7 @@ linters:
     - misspell
     - nakedret
     - revive
+    - testifylint
     - unconvert
     - unparam
     - usestdlibvars
