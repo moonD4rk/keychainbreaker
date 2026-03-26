@@ -7,9 +7,9 @@
 //
 // # Quick Start
 //
-// Open a keychain file and unlock it with the keychain password:
+// Open the default system keychain and unlock with password:
 //
-//	kc, err := keychainbreaker.Open("/path/to/login.keychain-db")
+//	kc, err := keychainbreaker.Open()
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
@@ -26,6 +26,14 @@
 //	for _, p := range passwords {
 //	    fmt.Printf("Service: %s, Account: %s, Password: %s\n", p.Service, p.Account, p.Password)
 //	}
+//
+// # Open Options
+//
+// Three ways to open a keychain:
+//
+//   - Open() -- default system login keychain
+//   - Open([WithFile]) -- specific file path
+//   - Open([WithBytes]) -- in-memory buffer
 //
 // # Unlock Methods
 //

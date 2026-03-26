@@ -69,10 +69,10 @@ func decodeHexKey(hexKey string) ([]byte, error) {
 	cleaned = strings.TrimPrefix(cleaned, "0x")
 	key, err := hex.DecodeString(cleaned)
 	if err != nil {
-		return nil, fmt.Errorf("unable to decode unlock key: %w", err)
+		return nil, fmt.Errorf("decode unlock key: %w", err)
 	}
 	if len(key) != keyLength {
-		return nil, fmt.Errorf("unlock key must be %d bytes (got %d)", keyLength, len(key))
+		return nil, fmt.Errorf("unlock key must be %d bytes, got %d", keyLength, len(key))
 	}
 	return key, nil
 }
@@ -81,7 +81,7 @@ func (kc *Keychain) findWrappingKey(master []byte) ([]byte, error) {
 	start := kc.blobBaseAddr + int(kc.dbBlob.startCryptoBlob)
 	end := kc.blobBaseAddr + int(kc.dbBlob.totalLength)
 	if start < 0 || end > len(kc.buf) || start >= end {
-		return nil, fmt.Errorf("db blob cipher bounds invalid")
+		return nil, fmt.Errorf("%w: db blob cipher bounds invalid", ErrParseFailed)
 	}
 
 	plain, err := kcDecrypt(master, kc.dbBlob.iv, kc.buf[start:end])
@@ -89,7 +89,7 @@ func (kc *Keychain) findWrappingKey(master []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %w", ErrWrongKey, err)
 	}
 	if len(plain) < keyLength {
-		return nil, fmt.Errorf("db key shorter than expected")
+		return nil, fmt.Errorf("%w: db key too short", ErrWrongKey)
 	}
 	return append([]byte{}, plain[:keyLength]...), nil
 }
@@ -97,12 +97,12 @@ func (kc *Keychain) findWrappingKey(master []byte) ([]byte, error) {
 func (kc *Keychain) generateKeyList() error {
 	symTable := kc.tables[tableSymmetricKey]
 	if symTable == nil {
-		return ErrNoKeys
+		return fmt.Errorf("%w: no symmetric key table", ErrWrongKey)
 	}
 
 	schema := kc.schema.forTable(tableSymmetricKey)
 	if schema == nil {
-		return fmt.Errorf("no schema for SymmetricKey table")
+		return fmt.Errorf("%w: no schema for SymmetricKey table", ErrParseFailed)
 	}
 
 	for _, recOffset := range symTable.recordOffsets {
@@ -123,14 +123,12 @@ func (kc *Keychain) generateKeyList() error {
 	}
 
 	if len(kc.keyList) == 0 {
-		return ErrNoKeys
+		return fmt.Errorf("%w: no symmetric keys recovered", ErrWrongKey)
 	}
 	return nil
 }
 
 // extractKeyBlob extracts the key material from a SymmetricKey record.
-// The keyblob data spans the entire payload after the record header
-// (not just the blob area), so we use rec.rawPayload.
 func extractKeyBlob(rec *record) (index, ciphertext, iv []byte, err error) {
 	data := rec.rawPayload
 	if len(data) < keyBlobLen {
@@ -142,7 +140,7 @@ func extractKeyBlob(rec *record) (index, ciphertext, iv []byte, err error) {
 		return nil, nil, nil, err
 	}
 	if blob.magic != keyBlobMagic {
-		return nil, nil, nil, fmt.Errorf("unexpected keyblob magic")
+		return nil, nil, nil, fmt.Errorf("unexpected keyblob magic: 0x%08x", blob.magic)
 	}
 
 	ssgpOffset := int(blob.totalLength) + 8
