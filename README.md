@@ -45,7 +45,7 @@ if err != nil {
 }
 
 for _, p := range passwords {
-    fmt.Printf("Service: %s, Account: %s\n", p.Service, p.Account)
+    fmt.Printf("Service: %s, Account: %s, Password: %s\n", p.Service, p.Account, p.Password)
 }
 ```
 
