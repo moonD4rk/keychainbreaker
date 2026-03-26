@@ -3,13 +3,17 @@ package keychainbreaker
 import (
 	"crypto/cipher"
 	"crypto/des"
+	"crypto/hmac"
+	"crypto/sha1"
 	"errors"
 	"fmt"
+	"hash"
 )
 
 const (
-	blockSize = 8
-	keyLength = 24
+	blockSize  = 8
+	keyLength  = 24
+	pbkdf2Iter = 1000
 )
 
 // magicCMSIV is the fixed IV used by Apple's CMS key wrapping (RFC 3217).
@@ -73,4 +77,45 @@ func keyblobDecrypt(encryptedBlob, iv, dbKey []byte) ([]byte, error) {
 		return nil, fmt.Errorf("invalid unwrapped key length: got %d, want %d", len(key), keyLength)
 	}
 	return append([]byte{}, key...), nil
+}
+
+// generateMasterKey derives a 24-byte master key from a password using
+// PBKDF2-HMAC-SHA1 with the salt from the keychain's DBBlob.
+func generateMasterKey(password string, salt []byte) []byte {
+	return pbkdf2Key([]byte(password), salt, pbkdf2Iter, keyLength, sha1.New)
+}
+
+// pbkdf2Key derives a key from password, salt and iteration count.
+// Copied from golang.org/x/crypto/pbkdf2 to avoid external dependency.
+func pbkdf2Key(password, salt []byte, iter, keyLen int, h func() hash.Hash) []byte {
+	prf := hmac.New(h, password)
+	hashLen := prf.Size()
+	numBlocks := (keyLen + hashLen - 1) / hashLen
+
+	var buf [4]byte
+	dk := make([]byte, 0, numBlocks*hashLen)
+	u := make([]byte, hashLen)
+	for block := 1; block <= numBlocks; block++ {
+		prf.Reset()
+		prf.Write(salt)
+		buf[0] = byte(block >> 24)
+		buf[1] = byte(block >> 16)
+		buf[2] = byte(block >> 8)
+		buf[3] = byte(block)
+		prf.Write(buf[:4])
+		dk = prf.Sum(dk)
+		t := dk[len(dk)-hashLen:]
+		copy(u, t)
+
+		for n := 2; n <= iter; n++ {
+			prf.Reset()
+			prf.Write(u)
+			u = u[:0]
+			u = prf.Sum(u)
+			for x := range u {
+				t[x] ^= u[x]
+			}
+		}
+	}
+	return dk[:keyLen]
 }

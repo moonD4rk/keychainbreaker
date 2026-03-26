@@ -86,13 +86,8 @@ func parseSchema(buf []byte, offset uint32) (applDBSchema, []uint32, error) {
 
 // tableInfo holds a parsed table header and its record offsets.
 type tableInfo struct {
-	tableSize     uint32
 	tableID       uint32
 	recordCount   uint32
-	records       uint32
-	indexesOffset uint32
-	freeListHead  uint32
-	totalRowCount uint32
 	recordOffsets []uint32
 	baseOffset    int // absolute offset of this table in the buffer
 }
@@ -103,14 +98,9 @@ func parseTable(buf []byte, offset int) (tableInfo, error) {
 	}
 	data := buf[offset : offset+tableHeaderLen]
 	t := tableInfo{
-		tableSize:     binary.BigEndian.Uint32(data[0:4]),
-		tableID:       binary.BigEndian.Uint32(data[4:8]),
-		recordCount:   binary.BigEndian.Uint32(data[8:12]),
-		records:       binary.BigEndian.Uint32(data[12:16]),
-		indexesOffset: binary.BigEndian.Uint32(data[16:20]),
-		freeListHead:  binary.BigEndian.Uint32(data[20:24]),
-		totalRowCount: binary.BigEndian.Uint32(data[24:28]),
-		baseOffset:    offset,
+		tableID:     binary.BigEndian.Uint32(data[4:8]),
+		recordCount: binary.BigEndian.Uint32(data[8:12]),
+		baseOffset:  offset,
 	}
 	recBase := offset + tableHeaderLen
 	for i := 0; i < int(t.recordCount); i++ {
@@ -189,7 +179,8 @@ func parseKeyBlob(buf []byte) (keyBlobInfo, error) {
 // record represents a parsed keychain record with dynamic attribute access.
 type record struct {
 	buf         []byte   // full record bytes
-	blobData    []byte   // blob area
+	blobData    []byte   // blob area (blobSize bytes after header)
+	rawPayload  []byte   // all bytes after header (blob + attribute data)
 	attrOffsets []uint32 // attribute offsets from header
 	schema      *tableSchema
 }
@@ -228,66 +219,56 @@ func parseRecord(buf []byte, offset int, schema *tableSchema) (*record, error) {
 	return &record{
 		buf:         recBuf,
 		blobData:    blobData,
+		rawPayload:  recBuf[headerLen:],
 		attrOffsets: attrOffsets,
 		schema:      schema,
 	}, nil
 }
 
-// stringAttr reads a length-prefixed string attribute by name.
-func (r *record) stringAttr(name string) string {
+// attrOffset resolves the byte offset for a named attribute.
+// Returns -1 if the attribute is not present or not found.
+func (r *record) attrOffset(name string) int {
 	idx := r.schema.attrIndex(name)
 	if idx < 0 || idx >= len(r.attrOffsets) {
-		return ""
+		return -1
 	}
 	off := r.attrOffsets[idx]
 	if off == 0 {
+		return -1
+	}
+	return int(off - 1) // 1-based to 0-based
+}
+
+// stringAttr reads a length-prefixed string attribute by name.
+func (r *record) stringAttr(name string) string {
+	pos := r.attrOffset(name)
+	if pos < 0 || pos+4 > len(r.buf) {
 		return ""
 	}
-	actual := int(off - 1) // 1-based to 0-based
-	if actual < 0 || actual+4 > len(r.buf) {
-		return ""
-	}
-	length := int(binary.BigEndian.Uint32(r.buf[actual : actual+4]))
-	start := actual + 4
+	length := int(binary.BigEndian.Uint32(r.buf[pos : pos+4]))
+	start := pos + 4
 	if start+length > len(r.buf) {
 		return ""
 	}
-	data := bytes.TrimRight(r.buf[start:start+length], "\x00")
-	return string(data)
+	return string(bytes.TrimRight(r.buf[start:start+length], "\x00"))
 }
 
 // uint32Attr reads a uint32 attribute by name.
 func (r *record) uint32Attr(name string) uint32 {
-	idx := r.schema.attrIndex(name)
-	if idx < 0 || idx >= len(r.attrOffsets) {
+	pos := r.attrOffset(name)
+	if pos < 0 || pos+4 > len(r.buf) {
 		return 0
 	}
-	off := r.attrOffsets[idx]
-	if off == 0 {
-		return 0
-	}
-	actual := int(off - 1)
-	if actual < 0 || actual+4 > len(r.buf) {
-		return 0
-	}
-	return binary.BigEndian.Uint32(r.buf[actual : actual+4])
+	return binary.BigEndian.Uint32(r.buf[pos : pos+4])
 }
 
 // timeAttr reads a 16-byte TimeDate attribute by name.
 func (r *record) timeAttr(name string) time.Time {
-	idx := r.schema.attrIndex(name)
-	if idx < 0 || idx >= len(r.attrOffsets) {
+	pos := r.attrOffset(name)
+	if pos < 0 || pos+16 > len(r.buf) {
 		return time.Time{}
 	}
-	off := r.attrOffsets[idx]
-	if off == 0 {
-		return time.Time{}
-	}
-	actual := int(off - 1)
-	if actual < 0 || actual+16 > len(r.buf) {
-		return time.Time{}
-	}
-	raw := bytes.TrimRight(r.buf[actual:actual+16], "\x00")
+	raw := bytes.TrimRight(r.buf[pos:pos+16], "\x00")
 	if len(raw) == 0 {
 		return time.Time{}
 	}
@@ -300,17 +281,9 @@ func (r *record) timeAttr(name string) time.Time {
 
 // fourCharAttr reads a 4-byte FourCC attribute by name.
 func (r *record) fourCharAttr(name string) string {
-	idx := r.schema.attrIndex(name)
-	if idx < 0 || idx >= len(r.attrOffsets) {
+	pos := r.attrOffset(name)
+	if pos < 0 || pos+4 > len(r.buf) {
 		return ""
 	}
-	off := r.attrOffsets[idx]
-	if off == 0 {
-		return ""
-	}
-	actual := int(off - 1)
-	if actual < 0 || actual+4 > len(r.buf) {
-		return ""
-	}
-	return strings.TrimRight(string(r.buf[actual:actual+4]), "\x00")
+	return strings.TrimRight(string(r.buf[pos:pos+4]), "\x00")
 }

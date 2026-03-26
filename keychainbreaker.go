@@ -6,15 +6,20 @@ import (
 	"os"
 )
 
+// metadataOffsetAdjustment is the fixed offset from the Metadata table base
+// to the DBBlob structure within the keychain file.
+const metadataOffsetAdjustment = 0x38
+
 // Keychain represents a parsed macOS keychain file.
 type Keychain struct {
-	buf     []byte
-	header  applDBHeader
-	schema  *dbSchema
-	tables  map[uint32]*tableInfo
-	dbBlob  dbBlob
-	dbKey   []byte            // 24-byte database key (nil when locked)
-	keyList map[string][]byte // SSGP label -> per-record key (nil when locked)
+	buf          []byte
+	header       applDBHeader
+	schema       *dbSchema
+	tables       map[uint32]*tableInfo
+	dbBlob       dbBlob
+	blobBaseAddr int               // absolute offset of the DBBlob in buf
+	dbKey        []byte            // 24-byte database key (nil when locked)
+	keyList      map[string][]byte // SSGP label -> per-record key (nil when locked)
 }
 
 // Open reads and parses a keychain file from disk.
@@ -86,12 +91,12 @@ func (kc *Keychain) extractDBBlob() error {
 		return fmt.Errorf("metadata table not found")
 	}
 
-	blobOffset := metaTable.baseOffset + 0x38
-	if blobOffset+dbBlobSize > len(kc.buf) {
+	kc.blobBaseAddr = metaTable.baseOffset + metadataOffsetAdjustment
+	if kc.blobBaseAddr+dbBlobSize > len(kc.buf) {
 		return fmt.Errorf("db blob exceeds file size")
 	}
 
-	blob, err := parseDBBlob(kc.buf[blobOffset : blobOffset+dbBlobSize])
+	blob, err := parseDBBlob(kc.buf[kc.blobBaseAddr : kc.blobBaseAddr+dbBlobSize])
 	if err != nil {
 		return err
 	}
@@ -134,7 +139,7 @@ func (kc *Keychain) parseGenericPassword(offset int, schema *tableSchema) (Gener
 		return GenericPassword{}, err
 	}
 
-	password := kc.decryptRecordPassword(rec)
+	password, _ := kc.decryptBlob(rec) // password is nil if decryption fails
 
 	return GenericPassword{
 		Service:     rec.stringAttr("svce"),
@@ -151,53 +156,48 @@ func (kc *Keychain) parseGenericPassword(offset int, schema *tableSchema) (Gener
 	}, nil
 }
 
-func (kc *Keychain) decryptRecordPassword(rec *record) []byte {
+// decryptBlob decrypts the SSGP blob area of a password record.
+func (kc *Keychain) decryptBlob(rec *record) ([]byte, error) {
 	if len(rec.blobData) < ssgpHeaderLen {
-		return nil
+		return nil, fmt.Errorf("blob too small: %d < %d", len(rec.blobData), ssgpHeaderLen)
 	}
 
 	block, err := parseSSGP(rec.blobData)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("parse SSGP: %w", err)
 	}
 	if string(block.magic) != secureStorageGroup {
-		return nil
+		return nil, fmt.Errorf("invalid SSGP magic: %q", block.magic)
 	}
 	if len(block.encryptedPassword) == 0 {
-		return nil
+		return nil, nil // no encrypted data present (header-only SSGP)
 	}
 
 	keyIndex := make([]byte, 0, len(block.magic)+len(block.label))
 	keyIndex = append(keyIndex, block.magic...)
 	keyIndex = append(keyIndex, block.label...)
-
 	dbkey, ok := kc.keyList[string(keyIndex)]
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("no matching key for SSGP label")
 	}
 
 	plain, err := kcDecrypt(dbkey, block.iv, block.encryptedPassword)
-	if err != nil || len(plain) == 0 {
-		return nil
+	if err != nil {
+		return nil, fmt.Errorf("decrypt password: %w", err)
 	}
-	return plain
+	return plain, nil
 }
 
 // PasswordHash exports the keychain password hash for offline cracking.
 // Format: $keychain$*<salt_hex>*<iv_hex>*<ciphertext_hex>
 // Compatible with hashcat mode 23100 and John the Ripper.
 // Does not require Unlock.
-func (kc *Keychain) PasswordHash() string {
-	metaTable, ok := kc.tables[tableMetadata]
-	if !ok {
-		return ""
-	}
-	blobOffset := metaTable.baseOffset + 0x38
-	start := blobOffset + int(kc.dbBlob.startCryptoBlob)
-	end := blobOffset + int(kc.dbBlob.totalLength)
+func (kc *Keychain) PasswordHash() (string, error) {
+	start := kc.blobBaseAddr + int(kc.dbBlob.startCryptoBlob)
+	end := kc.blobBaseAddr + int(kc.dbBlob.totalLength)
 	if start >= end || end > len(kc.buf) {
-		return ""
+		return "", fmt.Errorf("encrypted db key bounds invalid: [%d:%d] in buffer of %d", start, end, len(kc.buf))
 	}
 	encryptedDBKey := kc.buf[start:end]
-	return fmt.Sprintf("$keychain$*%x*%x*%x", kc.dbBlob.salt, kc.dbBlob.iv, encryptedDBKey)
+	return fmt.Sprintf("$keychain$*%x*%x*%x", kc.dbBlob.salt, kc.dbBlob.iv, encryptedDBKey), nil
 }
