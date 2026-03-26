@@ -44,6 +44,14 @@ func TestUnlockWrongKey(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestUnlockWrongPassword(t *testing.T) {
+	kc, err := Open(testKeychainPath)
+	require.NoError(t, err)
+
+	err = kc.Unlock(WithPassword("wrong-password"))
+	assert.Error(t, err)
+}
+
 func TestPasswordHash(t *testing.T) {
 	kc, err := Open(testKeychainPath)
 	require.NoError(t, err)
@@ -53,24 +61,42 @@ func TestPasswordHash(t *testing.T) {
 	assert.Contains(t, hash, "$keychain$*")
 }
 
-// Master key derived from password "keychainbreaker-test" via PBKDF2.
-const testMasterKeyHex = "ff358accf50cc180d034267e6575cb8602e9cafc4867831a"
+const (
+	// Master key derived from password "keychainbreaker-test" via PBKDF2.
+	testMasterKeyHex = "ff358accf50cc180d034267e6575cb8602e9cafc4867831a"
+	testPassword     = "keychainbreaker-test"
+)
 
-func TestGenericPasswords(t *testing.T) {
+func TestGenericPasswordsWithKey(t *testing.T) {
 	kc, err := Open(testKeychainPath)
 	require.NoError(t, err)
 
 	err = kc.Unlock(WithKey(testMasterKeyHex))
 	require.NoError(t, err)
 
+	assertGenericPasswords(t, kc)
+}
+
+func TestGenericPasswordsWithPassword(t *testing.T) {
+	kc, err := Open(testKeychainPath)
+	require.NoError(t, err)
+
+	err = kc.Unlock(WithPassword(testPassword))
+	require.NoError(t, err)
+
+	assertGenericPasswords(t, kc)
+}
+
+func assertGenericPasswords(t *testing.T, kc *Keychain) {
+	t.Helper()
+
 	passwords, err := kc.GenericPasswords()
 	require.NoError(t, err)
 	require.Len(t, passwords, 2)
 
-	// Build a map for easier lookup.
 	byService := make(map[string]GenericPassword)
-	for _, p := range passwords {
-		byService[p.Service] = p
+	for i := range passwords {
+		byService[passwords[i].Service] = passwords[i]
 	}
 
 	p1, ok := byService["moond4rk.com"]

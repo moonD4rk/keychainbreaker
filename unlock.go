@@ -10,7 +10,8 @@ import (
 type UnlockOption func(*unlockConfig)
 
 type unlockConfig struct {
-	hexKey string
+	hexKey   string
+	password string
 }
 
 // WithKey unlocks using a raw hex-encoded 24-byte master key.
@@ -20,13 +21,21 @@ func WithKey(hexKey string) UnlockOption {
 	}
 }
 
+// WithPassword unlocks using the keychain password.
+// The master key is derived via PBKDF2-HMAC-SHA1 with the salt from the keychain file.
+func WithPassword(password string) UnlockOption {
+	return func(c *unlockConfig) {
+		c.password = password
+	}
+}
+
 // Unlock decrypts the keychain using the provided credential.
 // After a successful Unlock, record extraction methods become available.
 func (kc *Keychain) Unlock(opt UnlockOption) error {
 	var cfg unlockConfig
 	opt(&cfg)
 
-	masterKey, err := deriveMasterKey(&cfg)
+	masterKey, err := deriveMasterKey(&cfg, kc)
 	if err != nil {
 		return err
 	}
@@ -44,11 +53,15 @@ func (kc *Keychain) Unlock(opt UnlockOption) error {
 	return nil
 }
 
-func deriveMasterKey(cfg *unlockConfig) ([]byte, error) {
-	if cfg.hexKey != "" {
+func deriveMasterKey(cfg *unlockConfig, kc *Keychain) ([]byte, error) {
+	switch {
+	case cfg.hexKey != "":
 		return decodeHexKey(cfg.hexKey)
+	case cfg.password != "":
+		return generateMasterKey(cfg.password, kc.dbBlob.salt), nil
+	default:
+		return nil, fmt.Errorf("no unlock method provided")
 	}
-	return nil, fmt.Errorf("no unlock method provided")
 }
 
 func decodeHexKey(hexKey string) ([]byte, error) {
