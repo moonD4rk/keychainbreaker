@@ -35,7 +35,7 @@ if err != nil {
     log.Fatal(err)
 }
 
-if err := kc.Unlock(keychainbreaker.WithPassword("your-keychain-password")); err != nil {
+if err := kc.Unlock(keychainbreaker.WithPassword("your-macos-login-password")); err != nil {
     log.Fatal(err)
 }
 

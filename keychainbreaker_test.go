@@ -11,7 +11,7 @@ const testKeychainPath = "./testdata/test.keychain-db"
 
 func openTestKeychain(t *testing.T) *Keychain {
 	t.Helper()
-	kc, err := Open(testKeychainPath)
+	kc, err := Open(WithFile(testKeychainPath))
 	require.NoError(t, err)
 	return kc
 }
@@ -24,14 +24,13 @@ func TestOpen(t *testing.T) {
 }
 
 func TestOpenInvalidFile(t *testing.T) {
-	// Provide 20+ bytes so header parsing succeeds, but signature is wrong.
-	_, err := OpenBytes(make([]byte, 64))
+	_, err := Open(WithBytes(make([]byte, 64)))
 	assert.ErrorIs(t, err, ErrInvalidSignature)
 }
 
 func TestOpenTruncatedFile(t *testing.T) {
-	_, err := OpenBytes([]byte("kych"))
-	assert.Error(t, err)
+	_, err := Open(WithBytes([]byte("kych")))
+	assert.ErrorIs(t, err, ErrParseFailed)
 }
 
 func TestExtractBeforeUnlock(t *testing.T) {
@@ -43,13 +42,13 @@ func TestExtractBeforeUnlock(t *testing.T) {
 func TestUnlockWrongKey(t *testing.T) {
 	kc := openTestKeychain(t)
 	err := kc.Unlock(WithKey("000000000000000000000000000000000000000000000000"))
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrWrongKey)
 }
 
 func TestUnlockWrongPassword(t *testing.T) {
 	kc := openTestKeychain(t)
 	err := kc.Unlock(WithPassword("wrong-password"))
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrWrongKey)
 }
 
 func TestPasswordHash(t *testing.T) {
@@ -61,7 +60,6 @@ func TestPasswordHash(t *testing.T) {
 }
 
 const (
-	// Master key derived from password "keychainbreaker-test" via PBKDF2.
 	testMasterKeyHex = "ff358accf50cc180d034267e6575cb8602e9cafc4867831a"
 	testPassword     = "keychainbreaker-test"
 )

@@ -4,11 +4,21 @@ package keychainbreaker
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // metadataOffsetAdjustment is the fixed offset from the Metadata table base
 // to the DBBlob structure within the keychain file.
 const metadataOffsetAdjustment = 0x38
+
+// defaultKeychainPath returns the default login keychain path for macOS.
+func defaultKeychainPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("get home directory: %w", err)
+	}
+	return filepath.Join(home, "Library", "Keychains", "login.keychain-db"), nil
+}
 
 // Keychain represents a parsed macOS keychain file.
 type Keychain struct {
@@ -22,22 +32,84 @@ type Keychain struct {
 	keyList      map[string][]byte // SSGP label -> per-record key (nil when locked)
 }
 
-// Open reads and parses a keychain file from disk.
-// The returned Keychain is in a locked state; call Unlock to decrypt.
-func Open(path string) (*Keychain, error) {
-	buf, err := os.ReadFile(path)
+// OpenOption configures how to open a keychain.
+type OpenOption func(*openConfig)
+
+type openConfig struct {
+	path string
+	buf  []byte
+}
+
+// WithFile specifies a keychain file path.
+func WithFile(path string) OpenOption {
+	return func(c *openConfig) {
+		c.path = path
+	}
+}
+
+// WithBytes provides keychain data from an in-memory buffer.
+func WithBytes(buf []byte) OpenOption {
+	return func(c *openConfig) {
+		c.buf = buf
+	}
+}
+
+// Open parses a keychain file and returns a locked Keychain.
+// Call Unlock before extracting records.
+//
+// With no options, it opens the default macOS login keychain
+// (~/Library/Keychains/login.keychain-db):
+//
+//	kc, err := keychainbreaker.Open()
+//
+// With a specific file path:
+//
+//	kc, err := keychainbreaker.Open(keychainbreaker.WithFile("/path/to/keychain"))
+//
+// From an in-memory buffer:
+//
+//	kc, err := keychainbreaker.Open(keychainbreaker.WithBytes(buf))
+func Open(opts ...OpenOption) (*Keychain, error) {
+	var cfg openConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	buf, err := resolveInput(&cfg)
 	if err != nil {
 		return nil, err
 	}
-	return OpenBytes(buf)
+
+	return parse(buf)
 }
 
-// OpenBytes parses a keychain from an in-memory buffer.
-// The returned Keychain is in a locked state; call Unlock to decrypt.
-func OpenBytes(buf []byte) (*Keychain, error) {
+func resolveInput(cfg *openConfig) ([]byte, error) {
+	switch {
+	case len(cfg.buf) > 0:
+		return cfg.buf, nil
+	case cfg.path != "":
+		buf, err := os.ReadFile(cfg.path)
+		if err != nil {
+			return nil, fmt.Errorf("open keychain %q: %w", cfg.path, err)
+		}
+		return buf, nil
+	default:
+		path, err := defaultKeychainPath()
+		if err != nil {
+			return nil, err
+		}
+		buf, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("open default keychain %q: %w", path, err)
+		}
+		return buf, nil
+	}
+}
+
+func parse(buf []byte) (*Keychain, error) {
 	hdr, err := parseHeader(buf)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrParseFailed, err)
 	}
 	if string(hdr.signature[:]) != keychainSignature {
 		return nil, ErrInvalidSignature
@@ -45,7 +117,7 @@ func OpenBytes(buf []byte) (*Keychain, error) {
 
 	_, tableOffsets, err := parseSchema(buf, hdr.schemaOff)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrParseFailed, err)
 	}
 
 	kc := &Keychain{
@@ -55,7 +127,6 @@ func OpenBytes(buf []byte) (*Keychain, error) {
 		keyList: make(map[string][]byte),
 	}
 
-	// Parse all tables and build the table index.
 	for _, off := range tableOffsets {
 		if off == 0 {
 			continue
@@ -70,16 +141,14 @@ func OpenBytes(buf []byte) (*Keychain, error) {
 		}
 	}
 
-	// Build dynamic schema from SchemaAttributes.
 	schema, err := buildSchema(buf, kc.tables)
 	if err != nil {
-		return nil, fmt.Errorf("schema discovery failed: %w", err)
+		return nil, fmt.Errorf("%w: schema discovery: %w", ErrParseFailed, err)
 	}
 	kc.schema = schema
 
-	// Extract DBBlob from Metadata table.
 	if err := kc.extractDBBlob(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrParseFailed, err)
 	}
 
 	return kc, nil
@@ -113,12 +182,12 @@ func (kc *Keychain) GenericPasswords() ([]GenericPassword, error) {
 
 	gpTable, ok := kc.tables[tableGenericPassword]
 	if !ok {
-		return nil, nil // no generic passwords
+		return nil, nil
 	}
 
 	schema := kc.schema.forTable(tableGenericPassword)
 	if schema == nil {
-		return nil, fmt.Errorf("no schema for GenericPassword table")
+		return nil, fmt.Errorf("%w: no schema for GenericPassword table", ErrParseFailed)
 	}
 
 	var results []GenericPassword
@@ -139,7 +208,7 @@ func (kc *Keychain) parseGenericPassword(offset int, schema *tableSchema) (Gener
 		return GenericPassword{}, err
 	}
 
-	password, _ := kc.decryptBlob(rec) // password is nil if decryption fails
+	password, _ := kc.decryptBlob(rec)
 
 	return GenericPassword{
 		Service:     rec.stringAttr("svce"),
@@ -170,7 +239,7 @@ func (kc *Keychain) decryptBlob(rec *record) ([]byte, error) {
 		return nil, fmt.Errorf("invalid SSGP magic: %q", block.magic)
 	}
 	if len(block.encryptedPassword) == 0 {
-		return nil, nil // no encrypted data present (header-only SSGP)
+		return nil, nil
 	}
 
 	keyIndex := make([]byte, 0, len(block.magic)+len(block.label))
@@ -196,7 +265,7 @@ func (kc *Keychain) PasswordHash() (string, error) {
 	start := kc.blobBaseAddr + int(kc.dbBlob.startCryptoBlob)
 	end := kc.blobBaseAddr + int(kc.dbBlob.totalLength)
 	if start >= end || end > len(kc.buf) {
-		return "", fmt.Errorf("encrypted db key bounds invalid: [%d:%d] in buffer of %d", start, end, len(kc.buf))
+		return "", fmt.Errorf("%w: encrypted db key bounds invalid", ErrParseFailed)
 	}
 	encryptedDBKey := kc.buf[start:end]
 	return fmt.Sprintf("$keychain$*%x*%x*%x", kc.dbBlob.salt, kc.dbBlob.iv, encryptedDBKey), nil
