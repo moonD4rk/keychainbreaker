@@ -139,4 +139,4 @@ formatters:
       extra-rules: true
     goimports:
       local-prefixes:
-        - github.com/moond4rk/go-chainbreaker
+        - github.com/moond4rk/keychainbreaker
