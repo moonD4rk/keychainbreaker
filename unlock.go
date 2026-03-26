@@ -97,7 +97,7 @@ func (kc *Keychain) findWrappingKey(master []byte) ([]byte, error) {
 func (kc *Keychain) generateKeyList() error {
 	symTable := kc.tables[tableSymmetricKey]
 	if symTable == nil {
-		return fmt.Errorf("%w: no symmetric key table", ErrWrongKey)
+		return fmt.Errorf("%w: no symmetric key table", ErrParseFailed)
 	}
 
 	schema := kc.schema.forTable(tableSymmetricKey)

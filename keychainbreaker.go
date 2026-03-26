@@ -58,7 +58,7 @@ func WithBytes(buf []byte) OpenOption {
 // Call Unlock before extracting records.
 //
 // With no options, it opens the default macOS login keychain
-// (~/ Library/Keychains/login.keychain-db):
+// (~/Library/Keychains/login.keychain-db):
 //
 //	kc, err := keychainbreaker.Open()
 //
@@ -88,13 +88,21 @@ func resolveInput(cfg *openConfig) ([]byte, error) {
 	case len(cfg.buf) > 0:
 		return cfg.buf, nil
 	case cfg.path != "":
-		return os.ReadFile(cfg.path)
+		buf, err := os.ReadFile(cfg.path)
+		if err != nil {
+			return nil, fmt.Errorf("open keychain %q: %w", cfg.path, err)
+		}
+		return buf, nil
 	default:
 		path, err := defaultKeychainPath()
 		if err != nil {
 			return nil, err
 		}
-		return os.ReadFile(path)
+		buf, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("open default keychain %q: %w", path, err)
+		}
+		return buf, nil
 	}
 }
 
