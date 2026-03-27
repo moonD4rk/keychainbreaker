@@ -262,6 +262,94 @@ func (kc *Keychain) InternetPasswords() ([]InternetPassword, error) {
 	return results, nil
 }
 
+// PrivateKeys returns all decrypted private key records.
+// Returns ErrLocked if the keychain has not been unlocked.
+func (kc *Keychain) PrivateKeys() ([]PrivateKey, error) {
+	records, err := kc.iterateRecords(tablePrivateKey)
+	if err != nil || len(records) == 0 {
+		return nil, err
+	}
+
+	var results []PrivateKey
+	for _, rec := range records {
+		pk, err := kc.decryptPrivateKey(rec)
+		if err != nil {
+			continue
+		}
+		results = append(results, pk)
+	}
+	return results, nil
+}
+
+func (kc *Keychain) decryptPrivateKey(rec *record) (PrivateKey, error) {
+	data := rec.rawPayload
+	if len(data) < keyBlobLen {
+		return PrivateKey{}, fmt.Errorf("private key blob too small")
+	}
+
+	blob, err := parseKeyBlob(data[:keyBlobLen])
+	if err != nil {
+		return PrivateKey{}, err
+	}
+	if blob.magic != keyBlobMagic {
+		return PrivateKey{}, fmt.Errorf("unexpected keyblob magic: 0x%08x", blob.magic)
+	}
+
+	cipherStart := int(blob.startCryptoBlob)
+	cipherEnd := int(blob.totalLength)
+	if cipherEnd > len(data) || cipherStart >= cipherEnd {
+		return PrivateKey{}, fmt.Errorf("invalid cipher bounds")
+	}
+
+	plain, err := privateKeyDecrypt(data[cipherStart:cipherEnd], blob.iv, kc.dbKey)
+	if err != nil {
+		return PrivateKey{}, err
+	}
+
+	var name string
+	var keyData []byte
+	if len(plain) > 12 {
+		name = string(plain[:12])
+		keyData = plain[12:]
+	} else {
+		keyData = plain
+	}
+
+	return PrivateKey{
+		Name:      name,
+		Data:      keyData,
+		PrintName: rec.stringAttr("PrintName"),
+		Label:     rec.stringAttr("Label"),
+		KeyClass:  rec.uint32Attr("KeyClass"),
+		KeyType:   rec.uint32Attr("KeyType"),
+		KeySize:   rec.uint32Attr("KeySizeInBits"),
+	}, nil
+}
+
+// Certificates returns all X.509 certificate records.
+// Certificates themselves are not encrypted, but Unlock must be
+// called first to initialize record parsing and allow iteration.
+func (kc *Keychain) Certificates() ([]Certificate, error) {
+	records, err := kc.iterateRecords(tableX509Certificate)
+	if err != nil || len(records) == 0 {
+		return nil, err
+	}
+
+	var results []Certificate
+	for _, rec := range records {
+		results = append(results, Certificate{
+			Data:      append([]byte(nil), rec.blobData...),
+			Type:      rec.uint32Attr("ctyp"),
+			Encoding:  rec.uint32Attr("cenc"),
+			PrintName: rec.stringAttr("labl"),
+			Subject:   rec.blobAttr("subj"),
+			Issuer:    rec.blobAttr("issu"),
+			Serial:    rec.blobAttr("snbr"),
+		})
+	}
+	return results, nil
+}
+
 // decryptBlob decrypts the SSGP blob area of a password record.
 func (kc *Keychain) decryptBlob(rec *record) ([]byte, error) {
 	if len(rec.blobData) < ssgpHeaderLen {

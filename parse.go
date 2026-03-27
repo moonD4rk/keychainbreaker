@@ -32,6 +32,7 @@ const (
 	tableSymmetricKey     uint32 = 0x00000011
 	tableGenericPassword  uint32 = 0x80000000
 	tableInternetPassword uint32 = 0x80000001
+	tableX509Certificate  uint32 = 0x80001000
 	tableMetadata         uint32 = 0x80008000
 )
 
@@ -277,6 +278,20 @@ func (r *record) timeAttr(name string) time.Time {
 		return time.Time{}
 	}
 	return parsed
+}
+
+// blobAttr reads a length-prefixed binary blob attribute by name.
+func (r *record) blobAttr(name string) []byte {
+	pos := r.attrOffset(name)
+	if pos < 0 || pos+4 > len(r.buf) {
+		return nil
+	}
+	length := int(binary.BigEndian.Uint32(r.buf[pos : pos+4]))
+	start := pos + 4
+	if length == 0 || start+length > len(r.buf) {
+		return nil
+	}
+	return append([]byte{}, r.buf[start:start+length]...)
 }
 
 // fourCharAttr reads a 4-byte FourCC attribute by name.
