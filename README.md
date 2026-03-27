@@ -30,7 +30,7 @@ Requires Go 1.20 or later.
 ## Quick Start
 
 ```go
-kc, err := keychainbreaker.Open("/path/to/login.keychain-db")
+kc, err := keychainbreaker.Open()
 if err != nil {
     log.Fatal(err)
 }
@@ -54,11 +54,14 @@ for _, p := range passwords {
 ### Open
 
 ```go
+// Default: system login keychain (~/Library/Keychains/login.keychain-db)
+kc, err := keychainbreaker.Open()
+
 // From file path
-kc, err := keychainbreaker.Open("/path/to/login.keychain-db")
+kc, err := keychainbreaker.Open(keychainbreaker.WithFile("/path/to/keychain"))
 
 // From in-memory buffer
-kc, err := keychainbreaker.OpenBytes(buf)
+kc, err := keychainbreaker.Open(keychainbreaker.WithBytes(buf))
 ```
 
 `Open` parses the keychain file structure and discovers table schemas.

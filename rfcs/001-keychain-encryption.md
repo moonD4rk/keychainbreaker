@@ -104,6 +104,18 @@ attribute list. This approach is robust against future layout changes.
 tables themselves must be parsed with hardcoded schemas, since they are needed to
 discover the schemas of all other tables.
 
+**Attribute naming**: attribute IDs have two forms. Most password-table attributes
+use FourCC codes (e.g. `"svce"` = 0x73766365), while key tables and some common
+attributes use numeric IDs with human-readable names from `SchemaAttributes`:
+
+| Attribute | Password tables | Certificate table | Key tables |
+|-----------|----------------|-------------------|------------|
+| Name/Label | `"PrintName"` (ID 7) | `"labl"` (FourCC) | `"PrintName"` (ID 1) |
+| Alias | `"Alias"` (ID 8) | `"alis"` (FourCC) | `"Alias"` (ID 2) |
+
+The same concept can have different attribute names across tables. A parser must
+use the names discovered from the schema, not hardcoded FourCC assumptions.
+
 ## 2. Binary Structures
 
 ```go

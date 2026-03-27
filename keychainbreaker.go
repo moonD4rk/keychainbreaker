@@ -220,8 +220,8 @@ func (kc *Keychain) GenericPasswords() ([]GenericPassword, error) {
 			Comment:     rec.stringAttr("icmt"),
 			Creator:     rec.fourCharAttr("crtr"),
 			Type:        rec.fourCharAttr("type"),
-			PrintName:   rec.stringAttr("labl"),
-			Alias:       rec.stringAttr("alis"),
+			PrintName:   rec.stringAttr("PrintName"),
+			Alias:       rec.stringAttr("Alias"),
 			Created:     rec.timeAttr("cdat"),
 			Modified:    rec.timeAttr("mdat"),
 		})
@@ -253,8 +253,8 @@ func (kc *Keychain) InternetPasswords() ([]InternetPassword, error) {
 			Comment:        rec.stringAttr("icmt"),
 			Creator:        rec.fourCharAttr("crtr"),
 			Type:           rec.fourCharAttr("type"),
-			PrintName:      rec.stringAttr("labl"),
-			Alias:          rec.stringAttr("alis"),
+			PrintName:      rec.stringAttr("PrintName"),
+			Alias:          rec.stringAttr("Alias"),
 			Created:        rec.timeAttr("cdat"),
 			Modified:       rec.timeAttr("mdat"),
 		})
