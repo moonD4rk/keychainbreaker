@@ -173,56 +173,93 @@ func (kc *Keychain) extractDBBlob() error {
 	return nil
 }
 
-// GenericPasswords returns all decrypted generic password records.
-// Returns ErrLocked if the keychain has not been unlocked.
-func (kc *Keychain) GenericPasswords() ([]GenericPassword, error) {
+// iterateRecords parses and returns all records from a table.
+func (kc *Keychain) iterateRecords(tableID uint32) ([]*record, error) {
 	if kc.dbKey == nil {
 		return nil, ErrLocked
 	}
 
-	gpTable, ok := kc.tables[tableGenericPassword]
+	table, ok := kc.tables[tableID]
 	if !ok {
 		return nil, nil
 	}
 
-	schema := kc.schema.forTable(tableGenericPassword)
+	schema := kc.schema.forTable(tableID)
 	if schema == nil {
-		return nil, fmt.Errorf("%w: no schema for GenericPassword table", ErrParseFailed)
+		return nil, fmt.Errorf("%w: no schema for table 0x%08x", ErrParseFailed, tableID)
 	}
 
-	var results []GenericPassword
-	for _, recOffset := range gpTable.recordOffsets {
-		absOffset := gpTable.baseOffset + int(recOffset)
-		gp, err := kc.parseGenericPassword(absOffset, schema)
+	var records []*record
+	for _, recOffset := range table.recordOffsets {
+		absOffset := table.baseOffset + int(recOffset)
+		rec, err := parseRecord(kc.buf, absOffset, schema)
 		if err != nil {
 			continue
 		}
-		results = append(results, gp)
+		records = append(records, rec)
+	}
+	return records, nil
+}
+
+// GenericPasswords returns all decrypted generic password records.
+// Returns ErrLocked if the keychain has not been unlocked.
+func (kc *Keychain) GenericPasswords() ([]GenericPassword, error) {
+	records, err := kc.iterateRecords(tableGenericPassword)
+	if err != nil || len(records) == 0 {
+		return nil, err
+	}
+
+	results := make([]GenericPassword, 0, len(records))
+	for _, rec := range records {
+		password, _ := kc.decryptBlob(rec)
+		results = append(results, GenericPassword{
+			Service:     rec.stringAttr("svce"),
+			Account:     rec.stringAttr("acct"),
+			Password:    password,
+			Description: rec.stringAttr("desc"),
+			Comment:     rec.stringAttr("icmt"),
+			Creator:     rec.fourCharAttr("crtr"),
+			Type:        rec.fourCharAttr("type"),
+			PrintName:   rec.stringAttr("labl"),
+			Alias:       rec.stringAttr("alis"),
+			Created:     rec.timeAttr("cdat"),
+			Modified:    rec.timeAttr("mdat"),
+		})
 	}
 	return results, nil
 }
 
-func (kc *Keychain) parseGenericPassword(offset int, schema *tableSchema) (GenericPassword, error) {
-	rec, err := parseRecord(kc.buf, offset, schema)
-	if err != nil {
-		return GenericPassword{}, err
+// InternetPasswords returns all decrypted internet password records.
+// Returns ErrLocked if the keychain has not been unlocked.
+func (kc *Keychain) InternetPasswords() ([]InternetPassword, error) {
+	records, err := kc.iterateRecords(tableInternetPassword)
+	if err != nil || len(records) == 0 {
+		return nil, err
 	}
 
-	password, _ := kc.decryptBlob(rec)
-
-	return GenericPassword{
-		Service:     rec.stringAttr("svce"),
-		Account:     rec.stringAttr("acct"),
-		Password:    password,
-		Description: rec.stringAttr("desc"),
-		Comment:     rec.stringAttr("icmt"),
-		Creator:     rec.fourCharAttr("crtr"),
-		Type:        rec.fourCharAttr("type"),
-		PrintName:   rec.stringAttr("labl"),
-		Alias:       rec.stringAttr("alis"),
-		Created:     rec.timeAttr("cdat"),
-		Modified:    rec.timeAttr("mdat"),
-	}, nil
+	results := make([]InternetPassword, 0, len(records))
+	for _, rec := range records {
+		password, _ := kc.decryptBlob(rec)
+		results = append(results, InternetPassword{
+			Server:         rec.stringAttr("srvr"),
+			Account:        rec.stringAttr("acct"),
+			Password:       password,
+			SecurityDomain: rec.stringAttr("sdmn"),
+			Protocol:       rec.fourCharAttr("ptcl"),
+			AuthType:       rec.fourCharAttr("atyp"),
+			Port:           rec.uint32Attr("port"),
+			Path:           rec.stringAttr("path"),
+			Description:    rec.stringAttr("desc"),
+			Comment:        rec.stringAttr("icmt"),
+			Creator:        rec.fourCharAttr("crtr"),
+			Type:           rec.fourCharAttr("type"),
+			PrintName:      rec.stringAttr("labl"),
+			Alias:          rec.stringAttr("alis"),
+			Created:        rec.timeAttr("cdat"),
+			Modified:       rec.timeAttr("mdat"),
+		})
+	}
+	return results, nil
 }
 
 // decryptBlob decrypts the SSGP blob area of a password record.

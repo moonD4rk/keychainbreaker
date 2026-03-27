@@ -101,6 +101,32 @@ func assertGenericPasswords(t *testing.T, kc *Keychain) {
 	assert.Equal(t, []byte("Another!Pass#123"), p2.Password)
 }
 
+func TestInternetPasswords(t *testing.T) {
+	kc := openTestKeychain(t)
+	require.NoError(t, kc.Unlock(WithPassword(testPassword)))
+
+	passwords, err := kc.InternetPasswords()
+	require.NoError(t, err)
+	require.Len(t, passwords, 1)
+
+	p := passwords[0]
+	assert.Equal(t, "moond4rk.com", p.Server)
+	assert.Equal(t, "webuser", p.Account)
+	assert.Equal(t, []byte("WebPass456"), p.Password)
+	assert.Equal(t, "htps", p.Protocol)
+	assert.NotEmpty(t, p.AuthType)
+	assert.Equal(t, uint32(443), p.Port)
+	assert.Equal(t, "/", p.Path)
+	assert.False(t, p.Created.IsZero())
+	assert.False(t, p.Modified.IsZero())
+}
+
+func TestInternetPasswordsBeforeUnlock(t *testing.T) {
+	kc := openTestKeychain(t)
+	_, err := kc.InternetPasswords()
+	assert.ErrorIs(t, err, ErrLocked)
+}
+
 func TestDynamicSchema(t *testing.T) {
 	kc := openTestKeychain(t)
 	gpSchema := kc.schema.forTable(tableGenericPassword)

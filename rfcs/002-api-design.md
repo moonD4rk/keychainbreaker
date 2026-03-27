@@ -1,6 +1,6 @@
 # RFC 002: Go API Design
 
-Status: Draft
+Status: Implemented
 Author: @moonD4rk
 Date: 2026-03-27
 
@@ -22,15 +22,18 @@ Design principles:
 ### Open
 
 ```go
-// Open reads and parses a keychain file from disk.
-func Open(path string) (*Keychain, error)
+// Open parses a keychain and returns a locked Keychain.
+func Open(opts ...OpenOption) (*Keychain, error)
 
-// OpenBytes parses a keychain from an in-memory buffer.
-func OpenBytes(buf []byte) (*Keychain, error)
+// OpenOption configures how to open a keychain.
+type OpenOption func(*openConfig)
+
+func WithFile(path string) OpenOption  // specific file path
+func WithBytes(buf []byte) OpenOption  // in-memory buffer
 ```
 
-`Open` / `OpenBytes` parse the file structure (header, schema, tables, DBBlob)
-but do **not** decrypt anything. The returned `Keychain` is in a locked state.
+With no options, `Open()` reads the default macOS login keychain
+(`~/Library/Keychains/login.keychain-db`).
 
 After `Open`, the following are available without unlocking:
 - `PasswordHash()` for offline cracking hash export
@@ -49,9 +52,6 @@ func WithKey(hexKey string) UnlockOption
 
 // WithPassword unlocks using the user's keychain password (PBKDF2 derivation).
 func WithPassword(password string) UnlockOption
-
-// WithSystemKey unlocks using a SystemKey file (e.g. /var/db/SystemKey).
-func WithSystemKey(path string) UnlockOption
 ```
 
 `Unlock` derives the master key, decrypts the database key, and unwraps all
@@ -66,9 +66,6 @@ func (kc *Keychain) GenericPasswords() ([]GenericPassword, error)
 
 // InternetPasswords returns all decrypted internet password records.
 func (kc *Keychain) InternetPasswords() ([]InternetPassword, error)
-
-// PrivateKeys returns all decrypted private key records.
-func (kc *Keychain) PrivateKeys() ([]PrivateKey, error)
 ```
 
 All extraction methods return `ErrLocked` if called before `Unlock`.
@@ -130,11 +127,20 @@ non-UTF-8 binary data. The caller decides how to interpret or encode the result.
 ## 3. Errors
 
 ```go
+// Errors returned by Open.
 var (
     ErrInvalidSignature = errors.New("keychainbreaker: invalid keychain signature")
-    ErrLocked           = errors.New("keychainbreaker: keychain is locked")
-    ErrWrongKey         = errors.New("keychainbreaker: wrong key or password")
-    ErrNoKeys           = errors.New("keychainbreaker: no symmetric keys recovered")
+    ErrParseFailed      = errors.New("keychainbreaker: parse failed")
+)
+
+// Errors returned by Unlock.
+var (
+    ErrWrongKey = errors.New("keychainbreaker: wrong key or password")
+)
+
+// Errors returned by record extraction methods.
+var (
+    ErrLocked = errors.New("keychainbreaker: keychain is locked")
 )
 ```
 
@@ -146,57 +152,25 @@ and cryptographic internals are unexported.
 ### Exported (uppercase)
 
 ```
-Functions:    Open, OpenBytes
-Types:        Keychain, UnlockOption, GenericPassword, InternetPassword, PrivateKey
+Functions:    Open
+Types:        Keychain, OpenOption, UnlockOption, GenericPassword, InternetPassword
 Methods:      Keychain.Unlock, Keychain.GenericPasswords, Keychain.InternetPasswords,
-              Keychain.PrivateKeys, Keychain.PasswordHash
-Options:      WithKey, WithPassword, WithSystemKey
-Errors:       ErrInvalidSignature, ErrLocked, ErrWrongKey, ErrNoKeys
+              Keychain.PasswordHash
+Options:      WithFile, WithBytes, WithKey, WithPassword
+Errors:       ErrInvalidSignature, ErrParseFailed, ErrLocked, ErrWrongKey
 ```
 
-### Unexported (lowercase)
+### Unexported
 
-```
-Binary structs:   applDBHeader, applDBSchema, tableHeader, commonBlob,
-                  dbBlob, keyBlob, ssgp, unlockBlob
-Schema:           dbSchema, tableSchema, attrDef, record
-Parsing:          parseHeader, parseSchema, parseDBBlob, parseTable,
-                  parseRecord, parseSSGP, parseKeyBlob
-Crypto:           kcDecrypt, keyblobDecrypt, privateKeyDecrypt
-Config:           unlockConfig
-Constants:        keychainSignature, keyBlobMagic, secureStorageGroup,
-                  magicCMSIV, blockSize, keyLength, all tableID constants
-```
-
-The `Keychain` struct is exported but all its fields are unexported:
-
-```go
-type Keychain struct {
-    buf       []byte
-    header    applDBHeader
-    schema    *dbSchema          // dynamic schema from SchemaInfo + SchemaAttributes
-    tables    map[uint32]*table  // tableID -> parsed table
-    dbBlob    dbBlob
-    dbKey     []byte             // 24-byte database key (nil when locked)
-    keyList   map[string][]byte  // SSGP label -> per-record key (nil when locked)
-}
-```
+All binary structures, parsing logic, cryptographic internals, and option configs
+are unexported. The `Keychain` struct is exported but all its fields are unexported.
 
 ## 5. Internal Architecture
 
-### File Layout
-
-Single package, split by responsibility:
-
-```
-keychainbreaker.go   Keychain, Open, OpenBytes
-unlock.go            Unlock, unlockConfig, WithKey, WithPassword, WithSystemKey
-decrypt.go           kcDecrypt, keyblobDecrypt, privateKeyDecrypt
-schema.go            dbSchema, tableSchema, attrDef, dynamic schema bootstrap
-parse.go             applDBHeader, dbBlob, ssgp, keyBlob, all parse* functions
-types.go             GenericPassword, InternetPassword, PrivateKey
-errors.go            ErrInvalidSignature, ErrLocked, ErrWrongKey, ErrNoKeys
-```
+Single package, split by responsibility: `keychainbreaker.go` (Open, record extraction),
+`unlock.go` (Unlock, key derivation), `decrypt.go` (3DES-CBC, PBKDF2, key unwrap),
+`schema.go` (dynamic schema discovery), `parse.go` (binary parsing), `types.go`
+(exported types), `errors.go` (sentinel errors).
 
 ### Dynamic Schema
 
@@ -227,38 +201,19 @@ On `GenericPasswords()` / `InternetPasswords()`:
 3. Look up per-record key from `keyList`
 4. `kcDecrypt(recordKey, SSGP.IV, SSGP.EncryptedPassword)` -> raw plaintext
 
-## 6. Phase 1 Scope
+## 6. Implementation Status
 
-Phase 1 implements the full architecture with focus on the HackBrowserData use case:
-
-| Feature | Phase 1 | Phase 2 |
-|---------|---------|---------|
-| `Open` / `OpenBytes` | Yes | - |
-| `WithKey` | Yes | - |
-| `WithPassword` | - | Yes (adds `crypto/sha1` + `golang.org/x/crypto/pbkdf2`) |
-| `WithSystemKey` | - | Yes |
-| `GenericPasswords` | Yes | - |
-| `InternetPasswords` | - | Yes |
-| `PrivateKeys` | - | Yes |
-| `PasswordHash` | - | Yes |
-| Dynamic schema | Yes | - |
-
-Phase 1 delivers a working library that HackBrowserData can import:
-
-```go
-kc, err := keychainbreaker.Open(keychainPath)
-if err != nil { ... }
-
-err = kc.Unlock(keychainbreaker.WithKey(hexKey))
-if err != nil { ... }
-
-passwords, err := kc.GenericPasswords()
-for _, p := range passwords {
-    if p.Account == storageName {
-        return p.Password, nil
-    }
-}
-```
+| Feature | Status |
+|---------|--------|
+| `Open` with functional options | Done |
+| `WithPassword` (PBKDF2) | Done |
+| `WithKey` (hex master key) | Done |
+| `GenericPasswords` | Done |
+| `InternetPasswords` | Done |
+| `PasswordHash` | Done |
+| Dynamic schema | Done |
+| `WithSystemKey` | Future |
+| `PrivateKeys` | Future |
 
 ## 7. Testing
 

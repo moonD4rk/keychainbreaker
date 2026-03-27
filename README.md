@@ -13,7 +13,7 @@ macOS or any CGO dependencies.
 ## Features
 
 - **Dynamic schema discovery** -- parses table schemas from the keychain file at runtime, no hardcoded struct layouts
-- **Password decryption** -- extracts and decrypts generic passwords using 3DES-CBC
+- **Password decryption** -- extracts and decrypts generic passwords and internet passwords using 3DES-CBC
 - **Multiple unlock methods** -- keychain password (PBKDF2-HMAC-SHA1) or raw master key (from memory forensics)
 - **Hash export** -- exports password hash compatible with hashcat (mode 23100) and John the Ripper
 - **Zero dependencies** -- standard library only, no CGO required
@@ -77,7 +77,11 @@ err = kc.Unlock(keychainbreaker.WithKey("6d43376c0d257bbaca2c41eded65b3b34a1a96b
 ### Extract Records
 
 ```go
+// Generic passwords (app-stored credentials)
 passwords, err := kc.GenericPasswords()
+
+// Internet passwords (web/network credentials)
+internetPasswords, err := kc.InternetPasswords()
 ```
 
 Each `GenericPassword` contains:
@@ -95,6 +99,29 @@ type GenericPassword struct {
     Alias       string
     Created     time.Time
     Modified    time.Time
+}
+```
+
+Each `InternetPassword` contains:
+
+```go
+type InternetPassword struct {
+    Server         string
+    Account        string
+    Password       []byte    // raw bytes; caller decides encoding
+    SecurityDomain string
+    Protocol       string    // e.g. "htps"
+    AuthType       string
+    Port           uint32
+    Path           string
+    Description    string
+    Comment        string
+    Creator        string
+    Type           string
+    PrintName      string
+    Alias          string
+    Created        time.Time
+    Modified       time.Time
 }
 ```
 
