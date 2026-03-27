@@ -1,7 +1,9 @@
 package keychainbreaker
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,13 +57,58 @@ func TestPasswordHash(t *testing.T) {
 	kc := openTestKeychain(t)
 	hash, err := kc.PasswordHash()
 	require.NoError(t, err)
-	assert.NotEmpty(t, hash)
-	assert.Contains(t, hash, "$keychain$*")
+	assert.Equal(t,
+		"$keychain$*fc143c45cce245f3e54fbb39141a894e2870dd85*26bca3823a0555be*07821bf723083271da09a3147cb6d73e415d7707099efc3273b36b01c975162bd388f4c5229979e556b74ec1ee3c7cdf",
+		hash,
+	)
 }
 
 const (
-	testMasterKeyHex = "ff358accf50cc180d034267e6575cb8602e9cafc4867831a"
+	// Derived from password "keychainbreaker-test" via PBKDF2-HMAC-SHA1.
+	testMasterKeyHex = "4557eb716bbf20200945109cf3b884af9aca72e890e47c07"
 	testPassword     = "keychainbreaker-test"
+)
+
+// Expected test data matching testdata/test.keychain-db.
+var (
+	wantGP1 = GenericPassword{
+		Service:     "moond4rk.com",
+		Account:     "admin",
+		Password:    []byte("password#123"),
+		Description: "application password",
+		Comment:     "test generic password",
+		Creator:     "mD4k",
+		Type:        "note",
+		PrintName:   "moond4rk.com",
+	}
+	wantGP2 = GenericPassword{
+		Service:   "HackBrowserData",
+		Account:   "admin",
+		Password:  []byte("password#123"),
+		PrintName: "HackBrowserData",
+	}
+	wantIP1 = InternetPassword{
+		Server:         "moond4rk.com",
+		Account:        "admin",
+		Password:       []byte("password#123"),
+		Description:    "Internet password",
+		Comment:        "test internet password",
+		Creator:        "mD4k",
+		Type:           "note",
+		PrintName:      "moond4rk.com",
+		SecurityDomain: "moond4rk.com",
+		Protocol:       "htps",
+		Port:           443,
+		Path:           "/login",
+	}
+	wantIP2 = InternetPassword{
+		Server:    "moond4rk.com",
+		Account:   "admin",
+		Password:  []byte("password#123"),
+		PrintName: "moond4rk.com",
+		Protocol:  "smb ",
+		Port:      445,
+	}
 )
 
 func TestGenericPasswordsWithKey(t *testing.T) {
@@ -88,17 +135,49 @@ func assertGenericPasswords(t *testing.T, kc *Keychain) {
 		byService[passwords[i].Service] = passwords[i]
 	}
 
-	p1, ok := byService["moond4rk.com"]
-	require.True(t, ok, "missing moond4rk.com")
-	assert.Equal(t, "user@moond4rk.com", p1.Account)
-	assert.Equal(t, []byte("PlainTextPassword"), p1.Password)
-	assert.False(t, p1.Created.IsZero())
-	assert.False(t, p1.Modified.IsZero())
+	got1 := byService["moond4rk.com"]
+	assert.False(t, got1.Created.IsZero())
+	assert.False(t, got1.Modified.IsZero())
+	got1.Created, got1.Modified = time.Time{}, time.Time{}
+	assert.Equal(t, wantGP1, got1)
 
-	p2, ok := byService["HackBrowserData"]
-	require.True(t, ok, "missing HackBrowserData")
-	assert.Equal(t, "admin@moond4rk.com", p2.Account)
-	assert.Equal(t, []byte("Another!Pass#123"), p2.Password)
+	got2 := byService["HackBrowserData"]
+	got2.Created, got2.Modified = time.Time{}, time.Time{}
+	assert.Equal(t, wantGP2, got2)
+}
+
+func TestInternetPasswords(t *testing.T) {
+	kc := openTestKeychain(t)
+	require.NoError(t, kc.Unlock(WithPassword(testPassword)))
+
+	passwords, err := kc.InternetPasswords()
+	require.NoError(t, err)
+	require.Len(t, passwords, 2)
+
+	byKey := make(map[string]InternetPassword)
+	for i := range passwords {
+		p := passwords[i]
+		key := fmt.Sprintf("%s:%s:%d", p.Server, p.Protocol, p.Port)
+		byKey[key] = p
+	}
+
+	got1 := byKey["moond4rk.com:htps:443"]
+	assert.False(t, got1.Created.IsZero())
+	assert.False(t, got1.Modified.IsZero())
+	got1.Created, got1.Modified = time.Time{}, time.Time{}
+	got1.AuthType = "" // raw uint32 value, not comparable as string
+	assert.Equal(t, wantIP1, got1)
+
+	got2 := byKey["moond4rk.com:smb :445"]
+	got2.Created, got2.Modified = time.Time{}, time.Time{}
+	got2.AuthType = ""
+	assert.Equal(t, wantIP2, got2)
+}
+
+func TestInternetPasswordsBeforeUnlock(t *testing.T) {
+	kc := openTestKeychain(t)
+	_, err := kc.InternetPasswords()
+	assert.ErrorIs(t, err, ErrLocked)
 }
 
 func TestDynamicSchema(t *testing.T) {
@@ -106,7 +185,7 @@ func TestDynamicSchema(t *testing.T) {
 	gpSchema := kc.schema.forTable(tableGenericPassword)
 	require.NotNil(t, gpSchema)
 
-	required := []string{"svce", "acct", "desc", "icmt", "cdat", "mdat"}
+	required := []string{"svce", "acct", "desc", "icmt", "cdat", "mdat", "PrintName"}
 	for _, name := range required {
 		assert.GreaterOrEqual(t, gpSchema.attrIndex(name), 0, "missing attribute %q", name)
 	}
