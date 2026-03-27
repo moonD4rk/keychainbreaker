@@ -327,8 +327,8 @@ func (kc *Keychain) decryptPrivateKey(rec *record) (PrivateKey, error) {
 }
 
 // Certificates returns all X.509 certificate records.
-// Certificates are not encrypted and do not require Unlock,
-// but Unlock must be called first to initialize record parsing.
+// Certificates themselves are not encrypted, but Unlock must be
+// called first to initialize record parsing and allow iteration.
 func (kc *Keychain) Certificates() ([]Certificate, error) {
 	records, err := kc.iterateRecords(tableX509Certificate)
 	if err != nil || len(records) == 0 {
@@ -338,7 +338,7 @@ func (kc *Keychain) Certificates() ([]Certificate, error) {
 	var results []Certificate
 	for _, rec := range records {
 		results = append(results, Certificate{
-			Data:      rec.blobData,
+			Data:      append([]byte(nil), rec.blobData...),
 			Type:      rec.uint32Attr("ctyp"),
 			Encoding:  rec.uint32Attr("cenc"),
 			PrintName: rec.stringAttr("labl"),

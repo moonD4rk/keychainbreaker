@@ -20,7 +20,7 @@ type GenericPassword struct {
 // PrivateKey represents a decrypted private key record.
 type PrivateKey struct {
 	Name      string // first 12 bytes of decrypted data
-	Data      []byte // raw private key material
+	Data      []byte `json:"-"` // raw private key material
 	PrintName string
 	Label     string
 	KeyClass  uint32
