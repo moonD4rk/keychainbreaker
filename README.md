@@ -6,19 +6,18 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/moond4rk/keychainbreaker)](https://goreportcard.com/report/github.com/moond4rk/keychainbreaker)
 [![License](https://img.shields.io/github/license/moonD4rk/keychainbreaker)](https://github.com/moonD4rk/keychainbreaker/blob/main/LICENSE)
 
-A Go library for parsing and decrypting macOS Keychain files (`login.keychain-db`).
-Extracts stored credentials from the Apple CSSM binary format without requiring
-macOS or any CGO dependencies.
+Go library for reading and decrypting macOS Keychain files (`login.keychain-db`).
 
-## Features
+## What It Does
 
-- **Dynamic schema discovery** -- parses table schemas from the keychain file at runtime, no hardcoded struct layouts
-- **Password decryption** -- extracts and decrypts generic passwords and internet passwords using 3DES-CBC
-- **Key and certificate extraction** -- decrypts private keys (RFC 3217 unwrap) and reads X.509 certificates
-- **Multiple unlock methods** -- keychain password (PBKDF2-HMAC-SHA1) or raw master key (from memory forensics)
-- **Hash export** -- exports password hash compatible with hashcat (mode 23100) and John the Ripper
-- **Zero dependencies** -- standard library only, no CGO required
-- **Cross-platform** -- compiles on Linux, macOS, and Windows; parses keychain files from any OS
+Open a macOS Keychain file, unlock it with the user's password, and extract:
+
+- **Generic passwords** -- app-stored credentials (Chrome Safe Storage, Wi-Fi, etc.)
+- **Internet passwords** -- web and network credentials (GitHub tokens, Docker registry, SMB shares, etc.)
+- **Private keys** -- RSA/EC private keys stored in the keychain
+- **X.509 certificates** -- DER-encoded certificates
+
+Works on any OS (Linux, macOS, Windows). No CGO. No macOS APIs. Just reads the binary file.
 
 ## Install
 
@@ -26,75 +25,56 @@ macOS or any CGO dependencies.
 go get github.com/moond4rk/keychainbreaker
 ```
 
-Requires Go 1.20 or later.
+Requires Go 1.20+.
 
 ## Quick Start
 
 ```go
+// Open the default macOS login keychain
 kc, err := keychainbreaker.Open()
-if err != nil {
-    log.Fatal(err)
-}
 
-if err := kc.Unlock(keychainbreaker.WithPassword("your-macos-login-password")); err != nil {
-    log.Fatal(err)
-}
+// Unlock with the user's macOS login password
+err = kc.Unlock(keychainbreaker.WithPassword("your-macos-login-password"))
 
+// Extract all saved passwords
 passwords, err := kc.GenericPasswords()
-if err != nil {
-    log.Fatal(err)
-}
-
 for _, p := range passwords {
-    fmt.Printf("Service: %s, Account: %s, Password: %s\n", p.Service, p.Account, p.Password)
+    fmt.Printf("Service: %s, Account: %s, Password: %s\n",
+        p.Service, p.Account, p.Password)
 }
 ```
 
-## API
+## Usage
 
-### Open
+### Open a Keychain
 
 ```go
-// Default: system login keychain (~/Library/Keychains/login.keychain-db)
-kc, err := keychainbreaker.Open()
-
-// From file path
-kc, err := keychainbreaker.Open(keychainbreaker.WithFile("/path/to/keychain"))
-
-// From in-memory buffer
-kc, err := keychainbreaker.Open(keychainbreaker.WithBytes(buf))
+kc, err := keychainbreaker.Open()                                      // default system keychain
+kc, err := keychainbreaker.Open(keychainbreaker.WithFile("/path/to"))   // specific file
+kc, err := keychainbreaker.Open(keychainbreaker.WithBytes(buf))         // from memory
 ```
-
-`Open` parses the keychain file structure and discovers table schemas.
-The returned `Keychain` is in a locked state -- call `Unlock` before extracting records.
 
 ### Unlock
 
 ```go
-// With keychain password (most common)
-err = kc.Unlock(keychainbreaker.WithPassword("password"))
-
-// With hex-encoded 24-byte master key (from memory forensics tools)
-err = kc.Unlock(keychainbreaker.WithKey("6d43376c0d257bbaca2c41eded65b3b34a1a96bd19979bde"))
+err = kc.Unlock(keychainbreaker.WithPassword("macos-login-password"))   // with password
+err = kc.Unlock(keychainbreaker.WithKey("hex-encoded-24-byte-key"))     // with master key
 ```
 
 ### Extract Records
 
 ```go
-// Generic passwords (app-stored credentials)
-passwords, err := kc.GenericPasswords()
-
-// Internet passwords (web/network credentials)
-internetPasswords, err := kc.InternetPasswords()
-
-// Private keys (encrypted, requires Unlock)
-privateKeys, err := kc.PrivateKeys()
-
-// X.509 certificates (not encrypted, but requires Unlock for record parsing)
-certificates, err := kc.Certificates()
+genericPasswords, err := kc.GenericPasswords()     // app credentials
+internetPasswords, err := kc.InternetPasswords()   // web/network credentials
+privateKeys, err := kc.PrivateKeys()               // encrypted private keys
+certificates, err := kc.Certificates()             // X.509 certificates
+hash, err := kc.PasswordHash()                     // offline cracking hash (no unlock needed)
 ```
 
-Each `GenericPassword` contains:
+### Record Types
+
+<details>
+<summary>GenericPassword</summary>
 
 ```go
 type GenericPassword struct {
@@ -111,16 +91,18 @@ type GenericPassword struct {
     Modified    time.Time
 }
 ```
+</details>
 
-Each `InternetPassword` contains:
+<details>
+<summary>InternetPassword</summary>
 
 ```go
 type InternetPassword struct {
     Server         string
     Account        string
-    Password       []byte    // raw bytes; caller decides encoding
+    Password       []byte
     SecurityDomain string
-    Protocol       string    // e.g. "htps"
+    Protocol       string    // "htps", "smb ", etc.
     AuthType       string
     Port           uint32
     Path           string
@@ -134,41 +116,65 @@ type InternetPassword struct {
     Modified       time.Time
 }
 ```
+</details>
 
-### Password Hash Export
-
-Export the keychain password hash for offline cracking (does not require `Unlock`):
+<details>
+<summary>PrivateKey</summary>
 
 ```go
-hash, err := kc.PasswordHash()
-// Output: $keychain$*<salt_hex>*<iv_hex>*<ciphertext_hex>
+type PrivateKey struct {
+    Name      string // first 12 bytes of decrypted data
+    Data      []byte // raw key material (PKCS#8)
+    PrintName string
+    Label     string
+    KeyClass  uint32
+    KeyType   uint32
+    KeySize   uint32
+}
 ```
+</details>
+
+<details>
+<summary>Certificate</summary>
+
+```go
+type Certificate struct {
+    Data      []byte // raw DER-encoded certificate
+    Type      uint32
+    Encoding  uint32
+    PrintName string
+    Subject   []byte
+    Issuer    []byte
+    Serial    []byte
+}
+```
+</details>
 
 ## How It Works
 
-macOS Keychain uses a three-layer key hierarchy with Triple-DES CBC encryption:
+macOS Keychain uses a three-layer encryption scheme:
 
 ```
 Password --> PBKDF2 --> Master Key --> DB Key --> Per-Record Keys --> Plaintext
 ```
 
-1. **Master key** is derived from the keychain password via PBKDF2-HMAC-SHA1 (1000 iterations)
-2. **Database key** is decrypted from the DBBlob using the master key
-3. **Per-record keys** are unwrapped from the SymmetricKey table using RFC 3217 Triple-DES Key Wrap
-4. **Passwords** are decrypted from SSGP (Secure Storage Group Password) blobs using per-record keys
+1. **Master key** derived from password via PBKDF2-HMAC-SHA1
+2. **Database key** decrypted from the keychain's metadata blob
+3. **Per-record keys** unwrapped using RFC 3217 Triple-DES Key Wrap
+4. **Passwords/keys** decrypted using per-record keys with 3DES-CBC
 
-The library uses dynamic schema discovery: it reads `SchemaInfo` and `SchemaAttributes`
-tables to learn the record layout at runtime, rather than relying on hardcoded struct
-definitions. This makes it robust against format variations across macOS versions.
+The library dynamically discovers table schemas from the keychain file itself,
+making it robust across macOS versions (10.6 through 13).
 
-See [RFC 001: macOS Keychain Encryption](rfcs/001-keychain-encryption.md) for the full
-technical specification.
+See [RFC 001](rfcs/001-keychain-encryption.md) for the full encryption specification.
 
 ## Compatibility
 
-- **macOS versions**: OS X 10.6 (Snow Leopard) through macOS 13 (Ventura)
-- **File formats**: `.keychain` and `.keychain-db` (traditional CSSM format)
-- **Not supported**: `keychain-2.db` (iCloud Keychain, SQLite-based) and Secure Enclave keys
+| Supported | Not Supported |
+|-----------|---------------|
+| `.keychain` and `.keychain-db` files | `keychain-2.db` (iCloud Keychain) |
+| OS X 10.6 through macOS 13 | Secure Enclave protected keys |
+| Linux, macOS, Windows (cross-compile) | |
 
 ## License
 
