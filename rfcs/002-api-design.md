@@ -227,13 +227,14 @@ On `GenericPasswords()` / `InternetPasswords()`:
 
 Records in the test keychain:
 
-| Type | Service/Server | Account | Password |
-|------|---------------|---------|----------|
-| GenericPassword | moond4rk.com | user@moond4rk.com | PlainTextPassword |
-| GenericPassword | HackBrowserData | admin@moond4rk.com | Another!Pass#123 |
-| InternetPassword | moond4rk.com | webuser | WebPass456 |
-| PrivateKey | keychainbreaker-test | - | RSA 2048-bit |
-| X509Certificate | keychainbreaker-test | - | self-signed |
+| Type | Service/Server | Account | Password | Extra Fields |
+|------|---------------|---------|----------|--------------|
+| GenericPassword | moond4rk.com | admin | password#123 | Desc, Comment, Creator(mD4k), Type(note) |
+| GenericPassword | HackBrowserData | admin | password#123 | (minimal) |
+| InternetPassword | moond4rk.com:443 | admin | password#123 | Protocol(htps), Path(/login), Domain, all fields |
+| InternetPassword | moond4rk.com:445 | admin | password#123 | Protocol(smb), minimal |
+| PrivateKey | keychainbreaker-test | - | RSA 2048-bit | - |
+| X509Certificate | keychainbreaker-test | - | self-signed | - |
 
 ### Test Categories
 
