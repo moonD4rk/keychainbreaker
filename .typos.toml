@@ -6,6 +6,7 @@ Decrypter = "Decrypter"
 EDE = "EDE"
 # "alis" is an Apple CSSM attribute name for Alias
 alis = "alis"
+issu = "issu"
 
 [files]
 extend-exclude = ["go.mod", "go.sum"]

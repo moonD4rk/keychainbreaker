@@ -14,6 +14,7 @@ macOS or any CGO dependencies.
 
 - **Dynamic schema discovery** -- parses table schemas from the keychain file at runtime, no hardcoded struct layouts
 - **Password decryption** -- extracts and decrypts generic passwords and internet passwords using 3DES-CBC
+- **Key and certificate extraction** -- decrypts private keys (RFC 3217 unwrap) and reads X.509 certificates
 - **Multiple unlock methods** -- keychain password (PBKDF2-HMAC-SHA1) or raw master key (from memory forensics)
 - **Hash export** -- exports password hash compatible with hashcat (mode 23100) and John the Ripper
 - **Zero dependencies** -- standard library only, no CGO required
@@ -85,6 +86,12 @@ passwords, err := kc.GenericPasswords()
 
 // Internet passwords (web/network credentials)
 internetPasswords, err := kc.InternetPasswords()
+
+// Private keys (encrypted, requires Unlock)
+privateKeys, err := kc.PrivateKeys()
+
+// X.509 certificates (not encrypted, but requires Unlock for record parsing)
+certificates, err := kc.Certificates()
 ```
 
 Each `GenericPassword` contains:

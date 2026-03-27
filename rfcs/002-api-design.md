@@ -116,8 +116,23 @@ type InternetPassword struct {
 }
 
 type PrivateKey struct {
-    Name string // first 12 bytes of decrypted data
-    Data []byte // raw private key material
+    Name      string // first 12 bytes of decrypted data
+    Data      []byte // raw private key material (PKCS#8)
+    PrintName string
+    Label     string
+    KeyClass  uint32
+    KeyType   uint32
+    KeySize   uint32
+}
+
+type Certificate struct {
+    Data      []byte // raw DER-encoded certificate
+    Type      uint32
+    Encoding  uint32
+    PrintName string
+    Subject   []byte
+    Issuer    []byte
+    Serial    []byte
 }
 ```
 
@@ -153,9 +168,10 @@ and cryptographic internals are unexported.
 
 ```
 Functions:    Open
-Types:        Keychain, OpenOption, UnlockOption, GenericPassword, InternetPassword
+Types:        Keychain, OpenOption, UnlockOption, GenericPassword, InternetPassword,
+              PrivateKey, Certificate
 Methods:      Keychain.Unlock, Keychain.GenericPasswords, Keychain.InternetPasswords,
-              Keychain.PasswordHash
+              Keychain.PrivateKeys, Keychain.Certificates, Keychain.PasswordHash
 Options:      WithFile, WithBytes, WithKey, WithPassword
 Errors:       ErrInvalidSignature, ErrParseFailed, ErrLocked, ErrWrongKey
 ```
@@ -213,7 +229,8 @@ On `GenericPasswords()` / `InternetPasswords()`:
 | `PasswordHash` | Done |
 | Dynamic schema | Done |
 | `WithSystemKey` | Future |
-| `PrivateKeys` | Future |
+| `PrivateKeys` | Done |
+| `Certificates` | Done |
 
 ## 7. Testing
 
