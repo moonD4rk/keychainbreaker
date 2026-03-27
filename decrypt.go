@@ -79,6 +79,25 @@ func keyblobDecrypt(encryptedBlob, iv, dbKey []byte) ([]byte, error) {
 	return append([]byte{}, key...), nil
 }
 
+// privateKeyDecrypt performs RFC 3217 two-stage key unwrapping for private keys.
+// Unlike keyblobDecrypt, this reverses ALL bytes (not just first 32),
+// because private keys are larger than 24-byte symmetric keys.
+func privateKeyDecrypt(encryptedBlob, iv, dbKey []byte) ([]byte, error) {
+	plain, err := kcDecrypt(dbKey, magicCMSIV, encryptedBlob)
+	if err != nil {
+		return nil, fmt.Errorf("private key unwrap stage 1: %w", err)
+	}
+	rev := make([]byte, len(plain))
+	for i := range plain {
+		rev[i] = plain[len(plain)-1-i]
+	}
+	finalPlain, err := kcDecrypt(dbKey, iv, rev)
+	if err != nil {
+		return nil, fmt.Errorf("private key unwrap stage 2: %w", err)
+	}
+	return finalPlain, nil
+}
+
 // generateMasterKey derives a 24-byte master key from a password using
 // PBKDF2-HMAC-SHA1 with the salt from the keychain's DBBlob.
 func generateMasterKey(password string, salt []byte) []byte {

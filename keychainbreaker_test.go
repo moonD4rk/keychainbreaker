@@ -1,6 +1,8 @@
 package keychainbreaker
 
 import (
+	"crypto/rsa"
+	"crypto/x509"
 	"fmt"
 	"testing"
 	"time"
@@ -172,6 +174,49 @@ func TestInternetPasswords(t *testing.T) {
 	got2.Created, got2.Modified = time.Time{}, time.Time{}
 	got2.AuthType = ""
 	assert.Equal(t, wantIP2, got2)
+}
+
+func TestPrivateKeys(t *testing.T) {
+	kc := openTestKeychain(t)
+	require.NoError(t, kc.Unlock(WithPassword(testPassword)))
+
+	keys, err := kc.PrivateKeys()
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+
+	pk := keys[0]
+	assert.Equal(t, "93B7C5C0", pk.PrintName)
+	assert.Equal(t, uint32(2048), pk.KeySize)
+
+	// Verify Data is a valid PKCS#8 RSA private key.
+	parsedKey, err := x509.ParsePKCS8PrivateKey(pk.Data)
+	require.NoError(t, err)
+	rsaKey, ok := parsedKey.(*rsa.PrivateKey)
+	require.True(t, ok, "expected RSA private key")
+	assert.Equal(t, 2048, rsaKey.N.BitLen())
+	assert.NoError(t, rsaKey.Validate())
+}
+
+func TestCertificates(t *testing.T) {
+	kc := openTestKeychain(t)
+	require.NoError(t, kc.Unlock(WithPassword(testPassword)))
+
+	certs, err := kc.Certificates()
+	require.NoError(t, err)
+	require.Len(t, certs, 1)
+
+	c := certs[0]
+	assert.Equal(t, "keychainbreaker-test", c.PrintName)
+	assert.NotEmpty(t, c.Subject)
+	assert.NotEmpty(t, c.Issuer)
+	assert.NotEmpty(t, c.Serial)
+
+	// Verify Data is a valid X.509 DER certificate.
+	x509Cert, err := x509.ParseCertificate(c.Data)
+	require.NoError(t, err)
+	assert.Equal(t, "keychainbreaker-test", x509Cert.Subject.CommonName)
+	assert.Equal(t, "keychainbreaker-test", x509Cert.Issuer.CommonName) // self-signed
+	assert.Equal(t, x509.RSA, x509Cert.PublicKeyAlgorithm)
 }
 
 func TestInternetPasswordsBeforeUnlock(t *testing.T) {
