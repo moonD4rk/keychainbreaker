@@ -213,17 +213,17 @@ func (kc *Keychain) GenericPasswords() ([]GenericPassword, error) {
 	for _, rec := range records {
 		password, _ := kc.decryptBlob(rec)
 		results = append(results, GenericPassword{
-			Service:     rec.stringAttr("svce"),
-			Account:     rec.stringAttr("acct"),
+			Service:     rec.stringAttr(attrServiceName),
+			Account:     rec.stringAttr(attrAccountName),
 			Password:    password,
-			Description: rec.stringAttr("desc"),
-			Comment:     rec.stringAttr("icmt"),
-			Creator:     rec.fourCharAttr("crtr"),
-			Type:        rec.fourCharAttr("type"),
-			PrintName:   rec.stringAttr("PrintName"),
-			Alias:       rec.stringAttr("Alias"),
-			Created:     rec.timeAttr("cdat"),
-			Modified:    rec.timeAttr("mdat"),
+			Description: rec.stringAttr(attrDescription),
+			Comment:     rec.stringAttr(attrComment),
+			Creator:     rec.fourCharAttr(attrCreator),
+			Type:        rec.fourCharAttr(attrType),
+			PrintName:   rec.stringAttr(attrPrintName),
+			Alias:       rec.stringAttr(attrAlias),
+			Created:     rec.timeAttr(attrCreated),
+			Modified:    rec.timeAttr(attrModified),
 		})
 	}
 	return results, nil
@@ -241,22 +241,22 @@ func (kc *Keychain) InternetPasswords() ([]InternetPassword, error) {
 	for _, rec := range records {
 		password, _ := kc.decryptBlob(rec)
 		results = append(results, InternetPassword{
-			Server:         rec.stringAttr("srvr"),
-			Account:        rec.stringAttr("acct"),
+			Server:         rec.stringAttr(attrServer),
+			Account:        rec.stringAttr(attrAccountName),
 			Password:       password,
-			SecurityDomain: rec.stringAttr("sdmn"),
-			Protocol:       rec.fourCharAttr("ptcl"),
-			AuthType:       rec.fourCharAttr("atyp"),
-			Port:           rec.uint32Attr("port"),
-			Path:           rec.stringAttr("path"),
-			Description:    rec.stringAttr("desc"),
-			Comment:        rec.stringAttr("icmt"),
-			Creator:        rec.fourCharAttr("crtr"),
-			Type:           rec.fourCharAttr("type"),
-			PrintName:      rec.stringAttr("PrintName"),
-			Alias:          rec.stringAttr("Alias"),
-			Created:        rec.timeAttr("cdat"),
-			Modified:       rec.timeAttr("mdat"),
+			SecurityDomain: rec.stringAttr(attrSecurityDomain),
+			Protocol:       rec.fourCharAttr(attrProtocol),
+			AuthType:       rec.fourCharAttr(attrAuthType),
+			Port:           rec.uint32Attr(attrPort),
+			Path:           rec.stringAttr(attrPath),
+			Description:    rec.stringAttr(attrDescription),
+			Comment:        rec.stringAttr(attrComment),
+			Creator:        rec.fourCharAttr(attrCreator),
+			Type:           rec.fourCharAttr(attrType),
+			PrintName:      rec.stringAttr(attrPrintName),
+			Alias:          rec.stringAttr(attrAlias),
+			Created:        rec.timeAttr(attrCreated),
+			Modified:       rec.timeAttr(attrModified),
 		})
 	}
 	return results, nil
@@ -308,9 +308,9 @@ func (kc *Keychain) decryptPrivateKey(rec *record) (PrivateKey, error) {
 
 	var name string
 	var keyData []byte
-	if len(plain) > 12 {
-		name = string(plain[:12])
-		keyData = plain[12:]
+	if len(plain) > privateKeyNameLen {
+		name = string(plain[:privateKeyNameLen])
+		keyData = plain[privateKeyNameLen:]
 	} else {
 		keyData = plain
 	}
@@ -318,11 +318,11 @@ func (kc *Keychain) decryptPrivateKey(rec *record) (PrivateKey, error) {
 	return PrivateKey{
 		Name:      name,
 		Data:      keyData,
-		PrintName: rec.stringAttr("PrintName"),
-		Label:     rec.stringAttr("Label"),
-		KeyClass:  rec.uint32Attr("KeyClass"),
-		KeyType:   rec.uint32Attr("KeyType"),
-		KeySize:   rec.uint32Attr("KeySizeInBits"),
+		PrintName: rec.stringAttr(attrPrintName),
+		Label:     rec.stringAttr(attrLabel),
+		KeyClass:  rec.uint32Attr(attrKeyClass),
+		KeyType:   rec.uint32Attr(attrKeyType),
+		KeySize:   rec.uint32Attr(attrKeySizeInBits),
 	}, nil
 }
 
@@ -339,12 +339,12 @@ func (kc *Keychain) Certificates() ([]Certificate, error) {
 	for _, rec := range records {
 		results = append(results, Certificate{
 			Data:      append([]byte(nil), rec.blobData...),
-			Type:      rec.uint32Attr("ctyp"),
-			Encoding:  rec.uint32Attr("cenc"),
-			PrintName: rec.stringAttr("labl"),
-			Subject:   rec.blobAttr("subj"),
-			Issuer:    rec.blobAttr("issu"),
-			Serial:    rec.blobAttr("snbr"),
+			Type:      rec.uint32Attr(attrCertType),
+			Encoding:  rec.uint32Attr(attrCertEncoding),
+			PrintName: rec.stringAttr(attrCertLabel),
+			Subject:   rec.blobAttr(attrSubject),
+			Issuer:    rec.blobAttr(attrIssuer),
+			Serial:    rec.blobAttr(attrSerial),
 		})
 	}
 	return results, nil

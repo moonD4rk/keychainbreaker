@@ -143,7 +143,7 @@ func extractKeyBlob(rec *record) (index, ciphertext, iv []byte, err error) {
 		return nil, nil, nil, fmt.Errorf("unexpected keyblob magic: 0x%08x", blob.magic)
 	}
 
-	ssgpOffset := int(blob.totalLength) + 8
+	ssgpOffset := int(blob.totalLength) + ssgpLabelOffset
 	if ssgpOffset+4 > len(data) {
 		return nil, nil, nil, fmt.Errorf("ssgp check exceeds record")
 	}
