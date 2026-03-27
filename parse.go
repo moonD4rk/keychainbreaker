@@ -22,7 +22,7 @@ const (
 	secureStorageGroup = "ssgp"
 	keyBlobMagic       = 0xFADE0711
 
-	ssgpLabelOffset   = 8  // offset from blob.totalLength to SSGP label
+	ssgpMagicOffset   = 8  // offset from blob.totalLength to SSGP magic ("ssgp")
 	privateKeyNameLen = 12 // first N bytes of decrypted private key data
 )
 
@@ -53,7 +53,6 @@ const (
 	attrCertType       = "ctyp"
 	attrCertEncoding   = "cenc"
 	attrCertLabel      = "labl" // certificate table uses FourCC, not "PrintName"
-	attrCertAlias      = "alis" // certificate table uses FourCC, not "Alias"
 	attrSubject        = "subj"
 	attrIssuer         = "issu"
 	attrSerial         = "snbr"

@@ -100,7 +100,7 @@ type GenericPassword struct {
 type InternetPassword struct {
     Server         string
     Account        string
-    Password       []byte
+    Password       []byte    // raw decrypted bytes; caller decides encoding
     SecurityDomain string
     Protocol       string
     AuthType       string
