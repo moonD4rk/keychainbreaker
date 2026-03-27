@@ -21,6 +21,41 @@ const (
 	keychainSignature  = "kych"
 	secureStorageGroup = "ssgp"
 	keyBlobMagic       = 0xFADE0711
+
+	ssgpMagicOffset   = 8  // offset from blob.totalLength to SSGP magic ("ssgp")
+	privateKeyNameLen = 12 // first N bytes of decrypted private key data
+)
+
+// Attribute name constants used by record extraction.
+// Most are FourCC codes from Apple's CSSM framework;
+// some (PrintName, Alias, Label) are string names from SchemaAttributes.
+const (
+	attrServiceName    = "svce"
+	attrAccountName    = "acct"
+	attrDescription    = "desc"
+	attrComment        = "icmt"
+	attrCreator        = "crtr"
+	attrType           = "type"
+	attrPrintName      = "PrintName"
+	attrAlias          = "Alias"
+	attrCreated        = "cdat"
+	attrModified       = "mdat"
+	attrServer         = "srvr"
+	attrSecurityDomain = "sdmn"
+	attrProtocol       = "ptcl"
+	attrAuthType       = "atyp"
+	attrPort           = "port"
+	attrPath           = "path"
+	attrLabel          = "Label"
+	attrKeyClass       = "KeyClass"
+	attrKeyType        = "KeyType"
+	attrKeySizeInBits  = "KeySizeInBits"
+	attrCertType       = "ctyp"
+	attrCertEncoding   = "cenc"
+	attrCertLabel      = "labl" // certificate table uses FourCC, not "PrintName"
+	attrSubject        = "subj"
+	attrIssuer         = "issu"
+	attrSerial         = "snbr"
 )
 
 // Record type constants (TableID values).

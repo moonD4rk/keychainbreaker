@@ -7,6 +7,7 @@
 [![License](https://img.shields.io/github/license/moonD4rk/keychainbreaker)](https://github.com/moonD4rk/keychainbreaker/blob/main/LICENSE)
 
 Go library for reading and decrypting macOS Keychain files (`login.keychain-db`).
+Supports OS X 10.6 (Snow Leopard) through macOS 26 (Tahoe).
 
 ## What It Does
 
@@ -164,7 +165,7 @@ Password --> PBKDF2 --> Master Key --> DB Key --> Per-Record Keys --> Plaintext
 4. **Passwords/keys** decrypted using per-record keys with 3DES-CBC
 
 The library dynamically discovers table schemas from the keychain file itself,
-making it robust across macOS versions (10.6 through 13).
+making it robust across macOS versions (10.6 through 26).
 
 See [RFC 001](rfcs/001-keychain-encryption.md) for the full encryption specification.
 
@@ -173,7 +174,7 @@ See [RFC 001](rfcs/001-keychain-encryption.md) for the full encryption specifica
 | Supported | Not Supported |
 |-----------|---------------|
 | `.keychain` and `.keychain-db` files | `keychain-2.db` (iCloud Keychain) |
-| OS X 10.6 through macOS 13 | Secure Enclave protected keys |
+| OS X 10.6 through macOS 26 (Tahoe) | Secure Enclave protected keys |
 | Linux, macOS, Windows (cross-compile) | |
 
 ## License

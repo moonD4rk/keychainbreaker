@@ -77,7 +77,7 @@ All extraction methods return `ErrLocked` if called before `Unlock`.
 // Format: $keychain$*<salt_hex>*<iv_hex>*<ciphertext_hex>
 // Compatible with hashcat mode 23100 and John the Ripper.
 // Does not require Unlock.
-func (kc *Keychain) PasswordHash() string
+func (kc *Keychain) PasswordHash() (string, error)
 ```
 
 ## 2. Exported Types
@@ -98,14 +98,15 @@ type GenericPassword struct {
 }
 
 type InternetPassword struct {
-    Server      string
-    Account     string
-    Password    []byte
-    Protocol    string
-    AuthType    string
-    Port        uint32
-    Path        string
-    Description string
+    Server         string
+    Account        string
+    Password       []byte    // raw decrypted bytes; caller decides encoding
+    SecurityDomain string
+    Protocol       string
+    AuthType       string
+    Port           uint32
+    Path           string
+    Description    string
     Comment     string
     Creator     string
     Type        string

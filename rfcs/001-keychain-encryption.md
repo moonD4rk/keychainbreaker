@@ -13,7 +13,7 @@ the keychainbreaker library.
 The Keychain uses Apple's CSSM (Common Security Services Manager) framework with a
 **three-layer key hierarchy** and **Triple-DES CBC** encryption throughout. All
 multi-byte fields are **Big-Endian**. The binary format has remained stable from
-OS X 10.6 (Snow Leopard) through macOS 13 (Ventura).
+OS X 10.6 (Snow Leopard) through macOS 26 (Tahoe).
 
 ## 1. File Structure
 
@@ -433,7 +433,7 @@ Valid padding = correct password found.
 
 ## 9. Version Compatibility
 
-**Supported**: OS X 10.6 through macOS 13, traditional `.keychain` / `.keychain-db` files.
+**Supported**: OS X 10.6 through macOS 26 (Tahoe), traditional `.keychain` / `.keychain-db` files.
 
 The format has maintained binary compatibility across 13 major OS versions. The
 encryption algorithm (3DES-CBC), key derivation (PBKDF2-SHA1, 1000 iterations),
