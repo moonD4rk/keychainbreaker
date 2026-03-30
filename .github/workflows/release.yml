@@ -100,4 +100,4 @@ jobs:
             --head "${BRANCH}")
           gh pr merge "${PR_URL}" --auto --squash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
