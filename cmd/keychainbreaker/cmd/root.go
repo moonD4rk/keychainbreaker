@@ -48,17 +48,16 @@ macOS Keychain files (login.keychain-db).`,
 
 func openKeychain(cmd *cobra.Command) (*keychainbreaker.Keychain, error) {
 	file, _ := cmd.Flags().GetString(flagFile)
+
 	var opts []keychainbreaker.OpenOption
 	if file != "" {
 		opts = append(opts, keychainbreaker.WithFile(file))
-	}
-
-	if file == "" {
+	} else {
 		home, _ := os.UserHomeDir()
 		file = filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 	}
-	fmt.Fprintf(os.Stderr, "Keychain: %s\n", file)
 
+	fmt.Fprintf(os.Stderr, "Keychain: %s\n", file)
 	return keychainbreaker.Open(opts...)
 }
 
@@ -68,23 +67,26 @@ func openAndTryUnlock(cmd *cobra.Command) (*keychainbreaker.Keychain, error) {
 		return nil, err
 	}
 
-	var unlockOpts []keychainbreaker.UnlockOption
+	keyFlag, _ := cmd.Flags().GetString(flagKey)
+	passwordFlag, _ := cmd.Flags().GetString(flagPassword)
+	keyProvided := cmd.Flags().Changed(flagKey)
+	passwordProvided := cmd.Flags().Changed(flagPassword)
+
+	var opt keychainbreaker.UnlockOption
 	switch {
-	case cmd.Flags().Changed(flagKey):
-		key, _ := cmd.Flags().GetString(flagKey)
-		unlockOpts = append(unlockOpts, keychainbreaker.WithKey(key))
-	case cmd.Flags().Changed(flagPassword):
-		pwd, _ := cmd.Flags().GetString(flagPassword)
-		unlockOpts = append(unlockOpts, keychainbreaker.WithPassword(pwd))
+	case keyProvided:
+		opt = keychainbreaker.WithKey(keyFlag)
+	case passwordProvided:
+		opt = keychainbreaker.WithPassword(passwordFlag)
 	default:
 		pwd, err := readPassword()
 		if err != nil {
 			return nil, err
 		}
-		unlockOpts = append(unlockOpts, keychainbreaker.WithPassword(pwd))
+		opt = keychainbreaker.WithPassword(pwd)
 	}
 
-	if err := kc.TryUnlock(unlockOpts...); err != nil {
+	if err := kc.TryUnlock(opt); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v, exporting metadata only\n", err)
 	}
 	return kc, nil
