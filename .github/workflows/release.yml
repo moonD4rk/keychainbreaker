@@ -31,6 +31,11 @@ jobs:
             exit 1
           fi
 
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
       # Stage 1: Tag and publish library
       - name: Tag library
         run: |
@@ -52,14 +57,12 @@ jobs:
           echo "Timeout waiting for Go module proxy"
           exit 1
 
-      # Stage 2: Update CLI go.mod on a branch, commit, tag, build
+      # Stage 2: Update CLI go.mod, commit on branch, tag CLI
       - name: Update CLI and tag
         run: |
           VERSION="${{ github.event.inputs.version }}"
           BRANCH="chore/cli-${VERSION}"
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "${BRANCH}"
 
           cd cmd/keychainbreaker
@@ -73,16 +76,19 @@ jobs:
           git tag "cmd/keychainbreaker/${VERSION}"
           git push origin "${BRANCH}" "cmd/keychainbreaker/${VERSION}"
 
+      # Stage 3: Build and release
+      # --skip=validate: HEAD is one commit ahead of the library tag (go.mod update),
+      # same approach as things3.
       - uses: goreleaser/goreleaser-action@v7
         with:
-          version: latest
-          args: release --clean
+          version: "~> v2"
+          args: release --clean --skip=validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ github.event.inputs.version }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
 
-      # Stage 3: Create PR to merge go.mod update into main
+      # Stage 4: Create PR to merge go.mod update into main
       - name: Create go.mod update PR
         run: |
           VERSION="${{ github.event.inputs.version }}"

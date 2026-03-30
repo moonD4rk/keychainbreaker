@@ -62,3 +62,6 @@ brews:
       bin.install "keychainbreaker"
     test: |
       system "#{bin}/keychainbreaker", "version"
+    caveats: |
+      keychainbreaker reads macOS Keychain files (login.keychain-db).
+      The keychain file must be accessible to extract credentials.
