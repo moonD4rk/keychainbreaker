@@ -62,6 +62,28 @@ err = kc.Unlock(keychainbreaker.WithPassword("macos-login-password"))   // with 
 err = kc.Unlock(keychainbreaker.WithKey("hex-encoded-24-byte-key"))     // with master key
 ```
 
+### TryUnlock (partial extraction)
+
+`TryUnlock` attempts to decrypt but does not block extraction on failure.
+When the password is wrong or unavailable, metadata (service, account,
+timestamps, etc.) is still returned with encrypted fields set to nil.
+
+```go
+// Wrong password: metadata still available, passwords nil
+err = kc.TryUnlock(keychainbreaker.WithPassword("maybe-wrong"))
+passwords, _ := kc.GenericPasswords()   // passwords[0].Service = "moond4rk.com"
+                                        // passwords[0].Password = nil
+
+// No credential: just metadata
+kc.TryUnlock()
+passwords, _ := kc.GenericPasswords()
+
+// Check if decryption succeeded
+if kc.Unlocked() {
+    // full data available
+}
+```
+
 ### Extract Records
 
 ```go

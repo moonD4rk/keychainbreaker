@@ -38,7 +38,6 @@ func (kc *Keychain) Unlock(opt UnlockOption) error {
 	return kc.unlock(opt)
 }
 
-
 // TryUnlock attempts to decrypt the keychain, but does not block record
 // extraction on failure. If the credential is wrong or missing, extraction
 // methods still return record metadata (service, account, timestamps, etc.)
