@@ -3,7 +3,7 @@ module github.com/moond4rk/keychainbreaker/cmd/keychainbreaker
 go 1.26.0
 
 require (
-	github.com/moond4rk/keychainbreaker v0.1.0
+	github.com/moond4rk/keychainbreaker v0.2.4
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/term v0.41.0
 )
