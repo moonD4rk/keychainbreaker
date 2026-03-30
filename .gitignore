@@ -12,6 +12,7 @@
 # === Project root config ===
 !.gitignore
 !.golangci.yml
+!.goreleaser.yml
 !.typos.toml
 !.codecov.yml
 !CLAUDE.md
