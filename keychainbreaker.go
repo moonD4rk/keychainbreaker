@@ -2,6 +2,8 @@
 package keychainbreaker
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -215,7 +217,7 @@ func (kc *Keychain) GenericPasswords() ([]GenericPassword, error) {
 	results := make([]GenericPassword, 0, len(records))
 	for _, rec := range records {
 		password, _ := kc.decryptBlob(rec)
-		results = append(results, GenericPassword{
+		gp := GenericPassword{
 			Service:     rec.stringAttr(attrServiceName),
 			Account:     rec.stringAttr(attrAccountName),
 			Password:    password,
@@ -227,7 +229,13 @@ func (kc *Keychain) GenericPasswords() ([]GenericPassword, error) {
 			Alias:       rec.stringAttr(attrAlias),
 			Created:     rec.timeAttr(attrCreated),
 			Modified:    rec.timeAttr(attrModified),
-		})
+		}
+		if password != nil {
+			gp.PlainPassword = string(password)
+			gp.HexPassword = hex.EncodeToString(password)
+			gp.Base64Password = base64.StdEncoding.EncodeToString(password)
+		}
+		results = append(results, gp)
 	}
 	return results, nil
 }
@@ -245,7 +253,7 @@ func (kc *Keychain) InternetPasswords() ([]InternetPassword, error) {
 	results := make([]InternetPassword, 0, len(records))
 	for _, rec := range records {
 		password, _ := kc.decryptBlob(rec)
-		results = append(results, InternetPassword{
+		ip := InternetPassword{
 			Server:         rec.stringAttr(attrServer),
 			Account:        rec.stringAttr(attrAccountName),
 			Password:       password,
@@ -262,7 +270,13 @@ func (kc *Keychain) InternetPasswords() ([]InternetPassword, error) {
 			Alias:          rec.stringAttr(attrAlias),
 			Created:        rec.timeAttr(attrCreated),
 			Modified:       rec.timeAttr(attrModified),
-		})
+		}
+		if password != nil {
+			ip.PlainPassword = string(password)
+			ip.HexPassword = hex.EncodeToString(password)
+			ip.Base64Password = base64.StdEncoding.EncodeToString(password)
+		}
+		results = append(results, ip)
 	}
 	return results, nil
 }
@@ -332,13 +346,15 @@ func (kc *Keychain) decryptPrivateKey(rec *record) (PrivateKey, error) {
 	}
 
 	return PrivateKey{
-		Name:      name,
-		Data:      keyData,
-		PrintName: rec.stringAttr(attrPrintName),
-		Label:     rec.stringAttr(attrLabel),
-		KeyClass:  rec.uint32Attr(attrKeyClass),
-		KeyType:   rec.uint32Attr(attrKeyType),
-		KeySize:   rec.uint32Attr(attrKeySizeInBits),
+		Name:       name,
+		Data:       keyData,
+		DataHex:    hex.EncodeToString(keyData),
+		DataBase64: base64.StdEncoding.EncodeToString(keyData),
+		PrintName:  rec.stringAttr(attrPrintName),
+		Label:      rec.stringAttr(attrLabel),
+		KeyClass:   rec.uint32Attr(attrKeyClass),
+		KeyType:    rec.uint32Attr(attrKeyType),
+		KeySize:    rec.uint32Attr(attrKeySizeInBits),
 	}, nil
 }
 
@@ -354,14 +370,23 @@ func (kc *Keychain) Certificates() ([]Certificate, error) {
 
 	var results []Certificate
 	for _, rec := range records {
+		data := append([]byte(nil), rec.blobData...)
+		subject := rec.blobAttr(attrSubject)
+		issuer := rec.blobAttr(attrIssuer)
+		serial := rec.blobAttr(attrSerial)
 		results = append(results, Certificate{
-			Data:      append([]byte(nil), rec.blobData...),
-			Type:      rec.uint32Attr(attrCertType),
-			Encoding:  rec.uint32Attr(attrCertEncoding),
-			PrintName: rec.stringAttr(attrCertLabel),
-			Subject:   rec.blobAttr(attrSubject),
-			Issuer:    rec.blobAttr(attrIssuer),
-			Serial:    rec.blobAttr(attrSerial),
+			Data:       data,
+			DataHex:    hex.EncodeToString(data),
+			DataBase64: base64.StdEncoding.EncodeToString(data),
+			Type:       rec.uint32Attr(attrCertType),
+			Encoding:   rec.uint32Attr(attrCertEncoding),
+			PrintName:  rec.stringAttr(attrCertLabel),
+			Subject:    subject,
+			SubjectHex: hex.EncodeToString(subject),
+			Issuer:     issuer,
+			IssuerHex:  hex.EncodeToString(issuer),
+			Serial:     serial,
+			SerialHex:  hex.EncodeToString(serial),
 		})
 	}
 	return results, nil

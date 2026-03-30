@@ -39,11 +39,16 @@ func runDump(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	output := buildDumpOutput(gps, ips, pks, certs)
-
 	outputPath, _ := cmd.Flags().GetString(flagOutput)
 	if outputPath == "" {
 		outputPath = "keychain_dump.json"
+	}
+
+	output := dumpOutput{
+		GenericPasswords:  gps,
+		InternetPasswords: ips,
+		PrivateKeys:       pks,
+		Certificates:      certs,
 	}
 
 	if err := writeJSONFile(outputPath, output); err != nil {

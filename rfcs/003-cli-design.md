@@ -17,10 +17,10 @@ separate module, `go.work` for local dev, two-stage release via GoReleaser.
 
 ```
 keychainbreaker/
-  go.mod                        # library (zero dependencies)
-  go.work                       # local dev only
+  go.mod                        # library (zero dependencies, Go 1.20)
+  go.work                       # local dev only (not committed)
   cmd/keychainbreaker/
-    go.mod                      # CLI module (cobra, x/term, library)
+    go.mod                      # CLI module (cobra, x/term, library, Go 1.26)
     main.go
     cmd/
       root.go                   # global flags
@@ -47,9 +47,6 @@ Global Flags:
   -p, --password <pwd>     Keychain password (omit to prompt interactively)
   -k, --key <hex>          Raw hex-encoded 24-byte master key
   -o, --output <path>      Output file path (default: ./keychain_dump.json)
-
-Dump Flags:
-  --encoding <type>        Password encoding: plaintext (default), hex, base64
 ```
 
 ### Unlock Flow
@@ -60,7 +57,7 @@ even when the password is wrong or unavailable:
 1. If `--key` is set, `TryUnlock(WithKey(...))`
 2. If `--password` is set, `TryUnlock(WithPassword(...))`
 3. Otherwise, prompt via `golang.org/x/term.ReadPassword()`, then `TryUnlock(WithPassword(...))`
-4. On wrong password, `TryUnlock` returns `ErrWrongKey` — CLI prints a
+4. On wrong password, `TryUnlock` returns `ErrWrongKey` -- CLI prints a
    warning to stderr and continues with metadata-only export
 5. Check `kc.Unlocked()` to report whether data is fully decrypted
 
@@ -70,6 +67,9 @@ The `hash` command skips unlock entirely.
 
 Single file, all keys use **snake_case**. Empty fields omitted (`omitempty`).
 
+Passwords are output in three formats simultaneously (plaintext, hex, base64).
+Binary data (private key, certificate) is output in two formats (hex, base64).
+
 ```json
 {
   "generic_passwords": [
@@ -77,6 +77,8 @@ Single file, all keys use **snake_case**. Empty fields omitted (`omitempty`).
       "service": "moond4rk.com",
       "account": "admin",
       "password": "password#123",
+      "hex_password": "70617373776f726423313233",
+      "base64_password": "cGFzc3dvcmQjMTIz",
       "description": "test password",
       "print_name": "moond4rk.com",
       "created_at": "2024-01-15T10:30:00Z",
@@ -90,9 +92,8 @@ Single file, all keys use **snake_case**. Empty fields omitted (`omitempty`).
       "protocol": "htps",
       "account": "admin",
       "password": "password#123",
-      "security_domain": "example",
-      "auth_type": "http",
-      "path": "/login"
+      "hex_password": "70617373776f726423313233",
+      "base64_password": "cGFzc3dvcmQjMTIz"
     }
   ],
   "private_keys": [
@@ -100,7 +101,8 @@ Single file, all keys use **snake_case**. Empty fields omitted (`omitempty`).
       "name": "keychainbreaker-test",
       "key_type": 42,
       "key_size": 2048,
-      "data": "MIIEvQIBADA..."
+      "data_hex": "3082...",
+      "data_base64": "MIIEvQ..."
     }
   ],
   "certificates": [
@@ -109,22 +111,12 @@ Single file, all keys use **snake_case**. Empty fields omitted (`omitempty`).
       "subject": "...",
       "issuer": "...",
       "serial": "01",
-      "data": "MIIDxTCCAq2..."
+      "data_hex": "3082...",
+      "data_base64": "MIIDxTCCAq2..."
     }
   ]
 }
 ```
-
-### Password Encoding
-
-`--encoding` controls how `password` ([]byte) is rendered in JSON.
-Binary data fields (private key/cert `data`) always use a safe encoding.
-
-| `--encoding` | password fields | key/cert `data` |
-|--------------|----------------|-----------------|
-| `plaintext` (default) | UTF-8 string | base64 |
-| `hex` | hex | hex |
-| `base64` | base64 | base64 |
 
 ### hash command
 
@@ -141,13 +133,13 @@ Compatible with hashcat mode 23100 and John the Ripper.
 
 ```
 $ keychainbreaker dump
-Keychain: ~/Library/Keychains/login.keychain-db
+Keychain: /Users/user/Library/Keychains/login.keychain-db
 Enter keychain password:
 Extracted:
-  Generic passwords:  12
-  Internet passwords: 8
+  Generic passwords:  42
+  Internet passwords: 15
   Private keys:       2
-  Certificates:       3
+  Certificates:       8
 Output: ./keychain_dump.json
 ```
 
@@ -155,13 +147,13 @@ When the password is wrong:
 
 ```
 $ keychainbreaker dump -p "wrong"
-Keychain: ~/Library/Keychains/login.keychain-db
+Keychain: /Users/user/Library/Keychains/login.keychain-db
 Warning: wrong key or password, exporting metadata only
 Extracted:
-  Generic passwords:  12 (metadata only)
-  Internet passwords: 8  (metadata only)
+  Generic passwords:  42 (metadata only)
+  Internet passwords: 15 (metadata only)
   Private keys:       2  (metadata only)
-  Certificates:       3
+  Certificates:       8
 Output: ./keychain_dump.json
 ```
 
@@ -181,24 +173,28 @@ keychainbreaker 0.1.0
 
 ## 6. Release
 
-Two-stage `workflow_dispatch` release, same as things3:
+Two-stage `workflow_dispatch` release:
 
 1. Tag library `vX.Y.Z`, push, wait for Go module proxy indexing
-2. Update `cmd/keychainbreaker/go.mod` to require new library version
-3. Commit, tag `cmd/keychainbreaker/vX.Y.Z`, push
-4. GoReleaser builds cross-platform binaries (darwin/linux, amd64/arm64, CGO_ENABLED=0)
-5. Publish to GitHub Releases + Homebrew tap
+2. Create branch, update `cmd/keychainbreaker/go.mod`, commit, tag `cmd/keychainbreaker/vX.Y.Z`
+3. GoReleaser builds cross-platform binaries (darwin/linux/windows, amd64/arm64, CGO_ENABLED=0)
+4. Publish to GitHub Releases + Homebrew tap
+5. Auto-create PR to merge go.mod update into main (auto-merge via squash)
+
+The CLI tag points to the commit with the updated go.mod, ensuring
+`go install` resolves the correct library version. The go.mod update
+is merged into main via PR to respect branch protection rules.
 
 ## 7. Checklist
 
-- [ ] `cmd/keychainbreaker/go.mod` (separate module)
-- [ ] `go.work` at root
-- [ ] Root command with global flags
-- [ ] `dump` command with `--encoding`
-- [ ] `hash` command (stdout)
-- [ ] `version` command
-- [ ] Interactive password prompt (`x/term`)
-- [ ] JSON output types (snake_case, omitempty)
-- [ ] `.goreleaser.yml`
-- [ ] `.github/workflows/release.yml`
-- [ ] Homebrew tap
+- [x] `cmd/keychainbreaker/go.mod` (separate module, Go 1.26)
+- [x] `go.work` at root (not committed)
+- [x] Root command with global flags
+- [x] `dump` command with triple password encoding
+- [x] `hash` command (stdout)
+- [x] `version` command
+- [x] Interactive password prompt (`x/term`)
+- [x] JSON output types (snake_case, omitempty)
+- [x] `.goreleaser.yml`
+- [x] `.github/workflows/release.yml`
+- [x] Homebrew tap

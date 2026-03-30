@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -53,7 +54,8 @@ func openKeychain(cmd *cobra.Command) (*keychainbreaker.Keychain, error) {
 	}
 
 	if file == "" {
-		file = "~/Library/Keychains/login.keychain-db"
+		home, _ := os.UserHomeDir()
+		file = filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 	}
 	fmt.Fprintf(os.Stderr, "Keychain: %s\n", file)
 
