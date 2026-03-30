@@ -31,9 +31,39 @@ func WithPassword(password string) UnlockOption {
 
 // Unlock decrypts the keychain using the provided credential.
 // After a successful Unlock, record extraction methods become available.
+// If Unlock fails, extraction methods return ErrLocked.
+// Use TryUnlock instead if you want to extract metadata even when
+// the password is wrong or unavailable.
 func (kc *Keychain) Unlock(opt UnlockOption) error {
+	kc.allowPartial = false
+	return kc.unlock(opt)
+}
+
+// TryUnlock attempts to decrypt the keychain, but does not block record
+// extraction on failure. If the credential is wrong or missing, extraction
+// methods still return record metadata (service, account, timestamps, etc.)
+// with encrypted fields (passwords, private key data) set to nil.
+//
+// TryUnlock returns any unlock error (e.g. ErrWrongKey) for informational
+// purposes, but the caller can safely ignore it and proceed with extraction.
+func (kc *Keychain) TryUnlock(opts ...UnlockOption) error {
+	kc.allowPartial = true
+	if len(opts) == 0 {
+		return nil
+	}
+	return kc.unlock(opts...)
+}
+
+// Unlocked reports whether the keychain has been successfully decrypted.
+func (kc *Keychain) Unlocked() bool {
+	return kc.dbKey != nil
+}
+
+func (kc *Keychain) unlock(opts ...UnlockOption) error {
 	var cfg unlockConfig
-	opt(&cfg)
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 
 	masterKey, err := deriveMasterKey(&cfg, kc)
 	if err != nil {
@@ -44,9 +74,11 @@ func (kc *Keychain) Unlock(opt UnlockOption) error {
 	if err != nil {
 		return err
 	}
-	kc.dbKey = dbKey
 
+	kc.dbKey = dbKey
 	if err := kc.generateKeyList(); err != nil {
+		kc.dbKey = nil
+		kc.keyList = make(map[string][]byte)
 		return err
 	}
 

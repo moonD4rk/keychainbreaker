@@ -29,7 +29,8 @@ type Keychain struct {
 	dbBlob       dbBlob
 	blobBaseAddr int               // absolute offset of the DBBlob in buf
 	dbKey        []byte            // 24-byte database key (nil when locked)
-	keyList      map[string][]byte // SSGP label -> per-record key (nil when locked)
+	keyList      map[string][]byte // SSGP label -> per-record key (empty until unlocked)
+	allowPartial bool              // allow extraction without successful unlock
 }
 
 // OpenOption configures how to open a keychain.
@@ -175,7 +176,7 @@ func (kc *Keychain) extractDBBlob() error {
 
 // iterateRecords parses and returns all records from a table.
 func (kc *Keychain) iterateRecords(tableID uint32) ([]*record, error) {
-	if kc.dbKey == nil {
+	if kc.dbKey == nil && !kc.allowPartial {
 		return nil, ErrLocked
 	}
 
@@ -201,8 +202,10 @@ func (kc *Keychain) iterateRecords(tableID uint32) ([]*record, error) {
 	return records, nil
 }
 
-// GenericPasswords returns all decrypted generic password records.
-// Returns ErrLocked if the keychain has not been unlocked.
+// GenericPasswords returns all generic password records.
+// Returns ErrLocked if neither Unlock nor TryUnlock has been called.
+// When TryUnlock is used and decryption fails, metadata fields are
+// returned but Password will be nil.
 func (kc *Keychain) GenericPasswords() ([]GenericPassword, error) {
 	records, err := kc.iterateRecords(tableGenericPassword)
 	if err != nil || len(records) == 0 {
@@ -229,8 +232,10 @@ func (kc *Keychain) GenericPasswords() ([]GenericPassword, error) {
 	return results, nil
 }
 
-// InternetPasswords returns all decrypted internet password records.
-// Returns ErrLocked if the keychain has not been unlocked.
+// InternetPasswords returns all internet password records.
+// Returns ErrLocked if neither Unlock nor TryUnlock has been called.
+// When TryUnlock is used and decryption fails, metadata fields are
+// returned but Password will be nil.
 func (kc *Keychain) InternetPasswords() ([]InternetPassword, error) {
 	records, err := kc.iterateRecords(tableInternetPassword)
 	if err != nil || len(records) == 0 {
@@ -262,8 +267,10 @@ func (kc *Keychain) InternetPasswords() ([]InternetPassword, error) {
 	return results, nil
 }
 
-// PrivateKeys returns all decrypted private key records.
-// Returns ErrLocked if the keychain has not been unlocked.
+// PrivateKeys returns all private key records.
+// Returns ErrLocked if neither Unlock nor TryUnlock has been called.
+// When TryUnlock is used and decryption fails, metadata fields are
+// returned but Name and Data will be empty.
 func (kc *Keychain) PrivateKeys() ([]PrivateKey, error) {
 	records, err := kc.iterateRecords(tablePrivateKey)
 	if err != nil || len(records) == 0 {
@@ -274,7 +281,16 @@ func (kc *Keychain) PrivateKeys() ([]PrivateKey, error) {
 	for _, rec := range records {
 		pk, err := kc.decryptPrivateKey(rec)
 		if err != nil {
-			continue
+			if !kc.allowPartial {
+				continue
+			}
+			pk = PrivateKey{
+				PrintName: rec.stringAttr(attrPrintName),
+				Label:     rec.stringAttr(attrLabel),
+				KeyClass:  rec.uint32Attr(attrKeyClass),
+				KeyType:   rec.uint32Attr(attrKeyType),
+				KeySize:   rec.uint32Attr(attrKeySizeInBits),
+			}
 		}
 		results = append(results, pk)
 	}
@@ -327,8 +343,9 @@ func (kc *Keychain) decryptPrivateKey(rec *record) (PrivateKey, error) {
 }
 
 // Certificates returns all X.509 certificate records.
-// Certificates themselves are not encrypted, but Unlock must be
-// called first to initialize record parsing and allow iteration.
+// Returns ErrLocked if neither Unlock nor TryUnlock has been called.
+// Certificates are not encrypted, so they are always fully available
+// regardless of whether decryption succeeded.
 func (kc *Keychain) Certificates() ([]Certificate, error) {
 	records, err := kc.iterateRecords(tableX509Certificate)
 	if err != nil || len(records) == 0 {

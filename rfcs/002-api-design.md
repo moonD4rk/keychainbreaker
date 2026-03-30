@@ -42,7 +42,16 @@ After `Open`, the following are available without unlocking:
 
 ```go
 // Unlock decrypts the keychain using the provided credential.
+// If Unlock fails, extraction methods return ErrLocked.
 func (kc *Keychain) Unlock(opt UnlockOption) error
+
+// TryUnlock attempts to decrypt, but does not block extraction on failure.
+// When the credential is wrong or missing, extraction methods still return
+// record metadata with encrypted fields (passwords, private key data) set to nil.
+func (kc *Keychain) TryUnlock(opts ...UnlockOption) error
+
+// Unlocked reports whether the keychain has been successfully decrypted.
+func (kc *Keychain) Unlocked() bool
 
 // UnlockOption configures how to unlock the keychain.
 type UnlockOption func(*unlockConfig)
@@ -58,6 +67,11 @@ func WithPassword(password string) UnlockOption
 per-record symmetric keys. After a successful `Unlock`, record extraction
 methods become available.
 
+`TryUnlock` performs the same decryption attempt but sets the keychain to
+partial mode regardless of success or failure. This allows extraction of
+unencrypted record attributes (service, account, timestamps, certificates)
+even when the password is wrong or unavailable.
+
 ### Record Extraction
 
 ```go
@@ -68,7 +82,9 @@ func (kc *Keychain) GenericPasswords() ([]GenericPassword, error)
 func (kc *Keychain) InternetPasswords() ([]InternetPassword, error)
 ```
 
-All extraction methods return `ErrLocked` if called before `Unlock`.
+Extraction methods return `ErrLocked` if called before `Unlock`.
+When `TryUnlock` is used instead, extraction methods return record metadata
+with encrypted fields set to nil (no `ErrLocked`).
 
 ### Utility
 
@@ -171,7 +187,8 @@ and cryptographic internals are unexported.
 Functions:    Open
 Types:        Keychain, OpenOption, UnlockOption, GenericPassword, InternetPassword,
               PrivateKey, Certificate
-Methods:      Keychain.Unlock, Keychain.GenericPasswords, Keychain.InternetPasswords,
+Methods:      Keychain.Unlock, Keychain.TryUnlock, Keychain.Unlocked,
+              Keychain.GenericPasswords, Keychain.InternetPasswords,
               Keychain.PrivateKeys, Keychain.Certificates, Keychain.PasswordHash
 Options:      WithFile, WithBytes, WithKey, WithPassword
 Errors:       ErrInvalidSignature, ErrParseFailed, ErrLocked, ErrWrongKey
@@ -232,6 +249,8 @@ On `GenericPasswords()` / `InternetPasswords()`:
 | `WithSystemKey` | Future |
 | `PrivateKeys` | Done |
 | `Certificates` | Done |
+| `TryUnlock` (partial extraction) | Done |
+| `Unlocked()` | Done |
 
 ## 7. Testing
 
@@ -286,5 +305,8 @@ func TestParseSSGP(t *testing.T)             // SSGP structure parsing
 func TestOpenInvalidFile(t *testing.T)       // non-keychain file -> ErrInvalidSignature
 func TestUnlockWrongKey(t *testing.T)        // bad key -> ErrWrongKey
 func TestExtractBeforeUnlock(t *testing.T)   // locked keychain -> ErrLocked
+func TestTryUnlock(t *testing.T)             // table-driven: 5 scenarios (correct/wrong password/key, no credential)
+func TestUnlockedInitialState(t *testing.T)  // Unlocked() == false after Open
+func TestTryUnlockThenUnlock(t *testing.T)   // TryUnlock failure then Unlock success recovers
 func TestOpenTruncatedFile(t *testing.T)     // corrupted/short file -> error
 ```

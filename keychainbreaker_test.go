@@ -225,6 +225,168 @@ func TestInternetPasswordsBeforeUnlock(t *testing.T) {
 	assert.ErrorIs(t, err, ErrLocked)
 }
 
+func TestTryUnlock(t *testing.T) {
+	tests := []struct {
+		name       string
+		opts       []UnlockOption
+		wantErr    error
+		wantUnlock bool
+	}{
+		{
+			name:       "correct password",
+			opts:       []UnlockOption{WithPassword(testPassword)},
+			wantUnlock: true,
+		},
+		{
+			name:       "correct key",
+			opts:       []UnlockOption{WithKey(testMasterKeyHex)},
+			wantUnlock: true,
+		},
+		{
+			name:    "wrong password",
+			opts:    []UnlockOption{WithPassword("wrong-password")},
+			wantErr: ErrWrongKey,
+		},
+		{
+			name:    "wrong key",
+			opts:    []UnlockOption{WithKey("000000000000000000000000000000000000000000000000")},
+			wantErr: ErrWrongKey,
+		},
+		{
+			name: "no credential",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kc := openTestKeychain(t)
+			err := kc.TryUnlock(tt.opts...)
+
+			// Verify unlock result.
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantUnlock, kc.Unlocked())
+
+			// GenericPasswords: metadata always available.
+			gps, err := kc.GenericPasswords()
+			require.NoError(t, err)
+			require.Len(t, gps, 2)
+			byService := make(map[string]GenericPassword)
+			for i := range gps {
+				byService[gps[i].Service] = gps[i]
+			}
+			got1 := byService["moond4rk.com"]
+			assert.Equal(t, "moond4rk.com", got1.Service)
+			assert.Equal(t, "admin", got1.Account)
+			assert.Equal(t, "application password", got1.Description)
+			assert.Equal(t, "mD4k", got1.Creator)
+			assert.False(t, got1.Created.IsZero())
+			got2 := byService["HackBrowserData"]
+			assert.Equal(t, "HackBrowserData", got2.Service)
+			assert.Equal(t, "admin", got2.Account)
+
+			// InternetPasswords: metadata always available.
+			ips, err := kc.InternetPasswords()
+			require.NoError(t, err)
+			require.Len(t, ips, 2)
+			byKey := make(map[string]InternetPassword)
+			for i := range ips {
+				p := ips[i]
+				key := fmt.Sprintf("%s:%s:%d", p.Server, p.Protocol, p.Port)
+				byKey[key] = p
+			}
+			ip1 := byKey["moond4rk.com:htps:443"]
+			assert.Equal(t, "moond4rk.com", ip1.Server)
+			assert.Equal(t, "admin", ip1.Account)
+			assert.Equal(t, uint32(443), ip1.Port)
+			assert.Equal(t, "/login", ip1.Path)
+			ip2 := byKey["moond4rk.com:smb :445"]
+			assert.Equal(t, uint32(445), ip2.Port)
+
+			// PrivateKeys: metadata always available.
+			pks, err := kc.PrivateKeys()
+			require.NoError(t, err)
+			require.Len(t, pks, 1)
+			assert.Equal(t, "93B7C5C0", pks[0].PrintName)
+			assert.Equal(t, uint32(2048), pks[0].KeySize)
+
+			// Certificates: not encrypted, always fully available.
+			certs, err := kc.Certificates()
+			require.NoError(t, err)
+			require.Len(t, certs, 1)
+			assert.Equal(t, "keychainbreaker-test", certs[0].PrintName)
+			assert.NotEmpty(t, certs[0].Data)
+			x509Cert, err := x509.ParseCertificate(certs[0].Data)
+			require.NoError(t, err)
+			assert.Equal(t, "keychainbreaker-test", x509Cert.Subject.CommonName)
+
+			// Encrypted fields: available only when unlocked.
+			if tt.wantUnlock {
+				assert.Equal(t, []byte("password#123"), got1.Password)
+				assert.Equal(t, []byte("password#123"), got2.Password)
+				assert.Equal(t, []byte("password#123"), ip1.Password)
+				assert.Equal(t, []byte("password#123"), ip2.Password)
+				assert.NotNil(t, pks[0].Data)
+				_, err := x509.ParsePKCS8PrivateKey(pks[0].Data)
+				require.NoError(t, err)
+			} else {
+				assert.Nil(t, got1.Password)
+				assert.Nil(t, got2.Password)
+				assert.Nil(t, ip1.Password)
+				assert.Nil(t, ip2.Password)
+				assert.Nil(t, pks[0].Data)
+				assert.Empty(t, pks[0].Name)
+			}
+		})
+	}
+}
+
+func TestUnlockedInitialState(t *testing.T) {
+	kc := openTestKeychain(t)
+	assert.False(t, kc.Unlocked())
+}
+
+func TestTryUnlockThenUnlock(t *testing.T) {
+	kc := openTestKeychain(t)
+
+	// TryUnlock with wrong password first.
+	err := kc.TryUnlock(WithPassword("wrong"))
+	require.ErrorIs(t, err, ErrWrongKey)
+	assert.False(t, kc.Unlocked())
+
+	// Unlock with correct password recovers full access.
+	require.NoError(t, kc.Unlock(WithPassword(testPassword)))
+	assert.True(t, kc.Unlocked())
+
+	gps, err := kc.GenericPasswords()
+	require.NoError(t, err)
+	require.Len(t, gps, 2)
+	for _, gp := range gps {
+		assert.Equal(t, []byte("password#123"), gp.Password)
+	}
+}
+
+func TestUnlockResetsAllowPartial(t *testing.T) {
+	kc := openTestKeychain(t)
+
+	// TryUnlock enables partial mode.
+	require.NoError(t, kc.TryUnlock())
+	_, err := kc.GenericPasswords()
+	require.NoError(t, err) // partial mode: no ErrLocked
+
+	// Unlock with wrong password resets to strict mode.
+	err = kc.Unlock(WithPassword("wrong"))
+	require.ErrorIs(t, err, ErrWrongKey)
+	assert.False(t, kc.Unlocked())
+
+	// Strict mode restored: extraction should return ErrLocked.
+	_, err = kc.GenericPasswords()
+	assert.ErrorIs(t, err, ErrLocked)
+}
+
 func TestDynamicSchema(t *testing.T) {
 	kc := openTestKeychain(t)
 	gpSchema := kc.schema.forTable(tableGenericPassword)
