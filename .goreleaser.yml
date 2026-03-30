@@ -1,0 +1,64 @@
+version: 2
+project_name: keychainbreaker
+
+builds:
+  - id: keychainbreaker
+    dir: cmd/keychainbreaker
+    binary: keychainbreaker
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/moond4rk/keychainbreaker/cmd/keychainbreaker/cmd.version={{.Version}}
+      - -X github.com/moond4rk/keychainbreaker/cmd/keychainbreaker/cmd.commit={{.Commit}}
+      - -X github.com/moond4rk/keychainbreaker/cmd/keychainbreaker/cmd.buildDate={{.Date}}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^chore: release"
+
+release:
+  github:
+    owner: moonD4rk
+    name: keychainbreaker
+  draft: false
+  prerelease: auto
+
+brews:
+  - name: keychainbreaker
+    homepage: "https://github.com/moonD4rk/keychainbreaker"
+    description: "Extract credentials from macOS Keychain files"
+    license: "Apache-2.0"
+    directory: Formula
+    skip_upload: auto
+    repository:
+      owner: moonD4rk
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: "github-actions[bot]"
+      email: "github-actions[bot]@users.noreply.github.com"
+    commit_msg_template: "brew formula update for {{ .ProjectName }} version {{ .Tag }}"
+    install: |
+      bin.install "keychainbreaker"
+    test: |
+      system "#{bin}/keychainbreaker", "version"

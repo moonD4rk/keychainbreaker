@@ -74,25 +74,34 @@ const (
 // Expected test data matching testdata/test.keychain-db.
 var (
 	wantGP1 = GenericPassword{
-		Service:     "moond4rk.com",
-		Account:     "admin",
-		Password:    []byte("password#123"),
-		Description: "application password",
-		Comment:     "test generic password",
-		Creator:     "mD4k",
-		Type:        "note",
-		PrintName:   "moond4rk.com",
+		Service:        "moond4rk.com",
+		Account:        "admin",
+		Password:       []byte("password#123"),
+		PlainPassword:  "password#123",
+		HexPassword:    "70617373776f726423313233",
+		Base64Password: "cGFzc3dvcmQjMTIz",
+		Description:    "application password",
+		Comment:        "test generic password",
+		Creator:        "mD4k",
+		Type:           "note",
+		PrintName:      "moond4rk.com",
 	}
 	wantGP2 = GenericPassword{
-		Service:   "HackBrowserData",
-		Account:   "admin",
-		Password:  []byte("password#123"),
-		PrintName: "HackBrowserData",
+		Service:        "HackBrowserData",
+		Account:        "admin",
+		Password:       []byte("password#123"),
+		PlainPassword:  "password#123",
+		HexPassword:    "70617373776f726423313233",
+		Base64Password: "cGFzc3dvcmQjMTIz",
+		PrintName:      "HackBrowserData",
 	}
 	wantIP1 = InternetPassword{
 		Server:         "moond4rk.com",
 		Account:        "admin",
 		Password:       []byte("password#123"),
+		PlainPassword:  "password#123",
+		HexPassword:    "70617373776f726423313233",
+		Base64Password: "cGFzc3dvcmQjMTIz",
 		Description:    "Internet password",
 		Comment:        "test internet password",
 		Creator:        "mD4k",
@@ -104,12 +113,15 @@ var (
 		Path:           "/login",
 	}
 	wantIP2 = InternetPassword{
-		Server:    "moond4rk.com",
-		Account:   "admin",
-		Password:  []byte("password#123"),
-		PrintName: "moond4rk.com",
-		Protocol:  "smb ",
-		Port:      445,
+		Server:         "moond4rk.com",
+		Account:        "admin",
+		Password:       []byte("password#123"),
+		PlainPassword:  "password#123",
+		HexPassword:    "70617373776f726423313233",
+		Base64Password: "cGFzc3dvcmQjMTIz",
+		PrintName:      "moond4rk.com",
+		Protocol:       "smb ",
+		Port:           445,
 	}
 )
 
