@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,7 +54,10 @@ func openKeychain(cmd *cobra.Command) (*keychainbreaker.Keychain, error) {
 	if file != "" {
 		opts = append(opts, keychainbreaker.WithFile(file))
 	} else {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine user home directory: %w", err)
+		}
 		file = filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 	}
 
@@ -87,6 +91,9 @@ func openAndTryUnlock(cmd *cobra.Command) (*keychainbreaker.Keychain, error) {
 	}
 
 	if err := kc.TryUnlock(opt); err != nil {
+		if !errors.Is(err, keychainbreaker.ErrWrongKey) {
+			return nil, err
+		}
 		fmt.Fprintf(os.Stderr, "Warning: %v, exporting metadata only\n", err)
 	}
 	return kc, nil

@@ -41,7 +41,7 @@ func runDump(cmd *cobra.Command, _ []string) error {
 
 	outputPath, _ := cmd.Flags().GetString(flagOutput)
 	if outputPath == "" {
-		outputPath = "keychain_dump.json"
+		outputPath = "./keychain_dump.json"
 	}
 
 	output := dumpOutput{

@@ -31,7 +31,7 @@ brew tap moond4rk/tap
 brew install moond4rk/tap/keychainbreaker
 ```
 
-**Go install**
+**Go install** (requires Go 1.26+)
 
 ```bash
 go install github.com/moond4rk/keychainbreaker/cmd/keychainbreaker@latest
@@ -65,7 +65,7 @@ Passwords are output in three formats: plaintext, hex, and base64.
 
 ```
 $ keychainbreaker dump
-Keychain: ~/Library/Keychains/login.keychain-db
+Keychain: /Users/user/Library/Keychains/login.keychain-db
 Enter keychain password:
 Extracted:
   Generic passwords:  42

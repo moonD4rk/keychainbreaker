@@ -65,9 +65,9 @@ type Certificate struct {
 	Encoding   uint32 `json:"encoding,omitempty"`
 	PrintName  string `json:"print_name,omitempty"`
 	Subject    []byte `json:"-"`
-	SubjectHex string `json:"subject,omitempty"`
+	SubjectHex string `json:"subject_hex,omitempty"`
 	Issuer     []byte `json:"-"`
-	IssuerHex  string `json:"issuer,omitempty"`
+	IssuerHex  string `json:"issuer_hex,omitempty"`
 	Serial     []byte `json:"-"`
-	SerialHex  string `json:"serial,omitempty"`
+	SerialHex  string `json:"serial_hex,omitempty"`
 }
