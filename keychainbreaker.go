@@ -30,6 +30,7 @@ type Keychain struct {
 	blobBaseAddr int               // absolute offset of the DBBlob in buf
 	dbKey        []byte            // 24-byte database key (nil when locked)
 	keyList      map[string][]byte // SSGP label -> per-record key (nil when locked)
+	allowPartial bool              // allow extraction without successful unlock
 }
 
 // OpenOption configures how to open a keychain.
@@ -175,7 +176,7 @@ func (kc *Keychain) extractDBBlob() error {
 
 // iterateRecords parses and returns all records from a table.
 func (kc *Keychain) iterateRecords(tableID uint32) ([]*record, error) {
-	if kc.dbKey == nil {
+	if kc.dbKey == nil && !kc.allowPartial {
 		return nil, ErrLocked
 	}
 
@@ -262,8 +263,10 @@ func (kc *Keychain) InternetPasswords() ([]InternetPassword, error) {
 	return results, nil
 }
 
-// PrivateKeys returns all decrypted private key records.
-// Returns ErrLocked if the keychain has not been unlocked.
+// PrivateKeys returns all private key records.
+// Returns ErrLocked if the keychain has not been unlocked (unless TryUnlock was used).
+// When operating in partial mode, metadata fields (PrintName, KeyType, KeySize)
+// are returned but Name and Data will be empty.
 func (kc *Keychain) PrivateKeys() ([]PrivateKey, error) {
 	records, err := kc.iterateRecords(tablePrivateKey)
 	if err != nil || len(records) == 0 {
@@ -274,7 +277,16 @@ func (kc *Keychain) PrivateKeys() ([]PrivateKey, error) {
 	for _, rec := range records {
 		pk, err := kc.decryptPrivateKey(rec)
 		if err != nil {
-			continue
+			if !kc.allowPartial {
+				continue
+			}
+			pk = PrivateKey{
+				PrintName: rec.stringAttr(attrPrintName),
+				Label:     rec.stringAttr(attrLabel),
+				KeyClass:  rec.uint32Attr(attrKeyClass),
+				KeyType:   rec.uint32Attr(attrKeyType),
+				KeySize:   rec.uint32Attr(attrKeySizeInBits),
+			}
 		}
 		results = append(results, pk)
 	}

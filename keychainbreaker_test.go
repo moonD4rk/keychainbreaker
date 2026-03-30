@@ -225,6 +225,74 @@ func TestInternetPasswordsBeforeUnlock(t *testing.T) {
 	assert.ErrorIs(t, err, ErrLocked)
 }
 
+func TestTryUnlockWithWrongPassword(t *testing.T) {
+	kc := openTestKeychain(t)
+	err := kc.TryUnlock(WithPassword("wrong-password"))
+	assert.ErrorIs(t, err, ErrWrongKey)
+	assert.False(t, kc.Unlocked())
+
+	// Metadata should be accessible despite wrong password.
+	gps, err := kc.GenericPasswords()
+	require.NoError(t, err)
+	require.Len(t, gps, 2)
+	for _, gp := range gps {
+		assert.NotEmpty(t, gp.Service)
+		assert.NotEmpty(t, gp.Account)
+		assert.Nil(t, gp.Password)
+	}
+
+	ips, err := kc.InternetPasswords()
+	require.NoError(t, err)
+	require.Len(t, ips, 2)
+	for _, ip := range ips {
+		assert.NotEmpty(t, ip.Server)
+		assert.Nil(t, ip.Password)
+	}
+
+	pks, err := kc.PrivateKeys()
+	require.NoError(t, err)
+	require.Len(t, pks, 1)
+	assert.NotEmpty(t, pks[0].PrintName)
+	assert.Equal(t, uint32(2048), pks[0].KeySize)
+	assert.Nil(t, pks[0].Data)
+
+	certs, err := kc.Certificates()
+	require.NoError(t, err)
+	require.Len(t, certs, 1)
+	assert.NotEmpty(t, certs[0].Data)
+	assert.Equal(t, "keychainbreaker-test", certs[0].PrintName)
+}
+
+func TestTryUnlockWithoutCredential(t *testing.T) {
+	kc := openTestKeychain(t)
+	err := kc.TryUnlock()
+	assert.NoError(t, err)
+	assert.False(t, kc.Unlocked())
+
+	gps, err := kc.GenericPasswords()
+	require.NoError(t, err)
+	require.Len(t, gps, 2)
+	for _, gp := range gps {
+		assert.NotEmpty(t, gp.Service)
+		assert.Nil(t, gp.Password)
+	}
+}
+
+func TestTryUnlockWithCorrectPassword(t *testing.T) {
+	kc := openTestKeychain(t)
+	err := kc.TryUnlock(WithPassword(testPassword))
+	require.NoError(t, err)
+	assert.True(t, kc.Unlocked())
+
+	// Full data should be available.
+	gps, err := kc.GenericPasswords()
+	require.NoError(t, err)
+	require.Len(t, gps, 2)
+	for _, gp := range gps {
+		assert.NotNil(t, gp.Password)
+	}
+}
+
 func TestDynamicSchema(t *testing.T) {
 	kc := openTestKeychain(t)
 	gpSchema := kc.schema.forTable(tableGenericPassword)
