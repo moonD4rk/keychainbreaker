@@ -7,7 +7,7 @@ type GenericPassword struct {
 	Service        string    `json:"service,omitempty"`
 	Account        string    `json:"account,omitempty"`
 	Password       []byte    `json:"-"`
-	PlainPassword  string    `json:"password,omitempty"`
+	PlainPassword  string    `json:"password,omitempty"` //nolint:gosec // intentional credential export
 	HexPassword    string    `json:"hex_password,omitempty"`
 	Base64Password string    `json:"base64_password,omitempty"`
 	Description    string    `json:"description,omitempty"`
@@ -25,7 +25,7 @@ type InternetPassword struct {
 	Server         string    `json:"server,omitempty"`
 	Account        string    `json:"account,omitempty"`
 	Password       []byte    `json:"-"`
-	PlainPassword  string    `json:"password,omitempty"`
+	PlainPassword  string    `json:"password,omitempty"` //nolint:gosec // intentional credential export
 	HexPassword    string    `json:"hex_password,omitempty"`
 	Base64Password string    `json:"base64_password,omitempty"`
 	SecurityDomain string    `json:"security_domain,omitempty"`
