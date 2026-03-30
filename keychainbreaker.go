@@ -29,7 +29,7 @@ type Keychain struct {
 	dbBlob       dbBlob
 	blobBaseAddr int               // absolute offset of the DBBlob in buf
 	dbKey        []byte            // 24-byte database key (nil when locked)
-	keyList      map[string][]byte // SSGP label -> per-record key (nil when locked)
+	keyList      map[string][]byte // SSGP label -> per-record key (empty until unlocked)
 	allowPartial bool              // allow extraction without successful unlock
 }
 
