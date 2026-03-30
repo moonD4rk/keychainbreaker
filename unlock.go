@@ -35,6 +35,7 @@ func WithPassword(password string) UnlockOption {
 // Use TryUnlock instead if you want to extract metadata even when
 // the password is wrong or unavailable.
 func (kc *Keychain) Unlock(opt UnlockOption) error {
+	kc.allowPartial = false
 	return kc.unlock(opt)
 }
 
@@ -73,9 +74,11 @@ func (kc *Keychain) unlock(opts ...UnlockOption) error {
 	if err != nil {
 		return err
 	}
-	kc.dbKey = dbKey
 
+	kc.dbKey = dbKey
 	if err := kc.generateKeyList(); err != nil {
+		kc.dbKey = nil
+		kc.keyList = make(map[string][]byte)
 		return err
 	}
 

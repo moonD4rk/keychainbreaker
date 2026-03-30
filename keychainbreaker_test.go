@@ -369,6 +369,24 @@ func TestTryUnlockThenUnlock(t *testing.T) {
 	}
 }
 
+func TestUnlockResetsAllowPartial(t *testing.T) {
+	kc := openTestKeychain(t)
+
+	// TryUnlock enables partial mode.
+	kc.TryUnlock()
+	_, err := kc.GenericPasswords()
+	assert.NoError(t, err) // partial mode: no ErrLocked
+
+	// Unlock with wrong password resets to strict mode.
+	err = kc.Unlock(WithPassword("wrong"))
+	assert.ErrorIs(t, err, ErrWrongKey)
+	assert.False(t, kc.Unlocked())
+
+	// Strict mode restored: extraction should return ErrLocked.
+	_, err = kc.GenericPasswords()
+	assert.ErrorIs(t, err, ErrLocked)
+}
+
 func TestDynamicSchema(t *testing.T) {
 	kc := openTestKeychain(t)
 	gpSchema := kc.schema.forTable(tableGenericPassword)
