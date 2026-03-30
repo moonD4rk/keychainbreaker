@@ -20,7 +20,83 @@ Open a macOS Keychain file, unlock it with the user's password, and extract:
 
 Works on any OS (Linux, macOS, Windows). No CGO. No macOS APIs. Just reads the binary file.
 
-## Install
+## CLI Tool
+
+### Install
+
+**Homebrew**
+
+```bash
+brew tap moond4rk/tap
+brew install moond4rk/tap/keychainbreaker
+```
+
+**Go install**
+
+```bash
+go install github.com/moond4rk/keychainbreaker/cmd/keychainbreaker@latest
+```
+
+**Binary**
+
+Download from [GitHub Releases](https://github.com/moonD4rk/keychainbreaker/releases).
+
+### Usage
+
+```
+$ keychainbreaker -h
+
+Commands:
+  dump        Export all keychain data to a JSON file
+  hash        Print password hash for offline cracking (no unlock needed)
+  version     Print version information
+
+Flags:
+  -f, --file string       Keychain file path (default: ~/Library/Keychains/login.keychain-db)
+  -p, --password string   Keychain password (omit to be prompted)
+  -k, --key string        Hex-encoded 24-byte master key
+  -o, --output string     Output file path (default: ./keychain_dump.json)
+```
+
+### dump
+
+Export all keychain data (passwords, keys, certificates) to a single JSON file.
+Passwords are output in three formats: plaintext, hex, and base64.
+
+```
+$ keychainbreaker dump
+Keychain: ~/Library/Keychains/login.keychain-db
+Enter keychain password:
+Extracted:
+  Generic passwords:  42
+  Internet passwords: 15
+  Private keys:       2
+  Certificates:       8
+Output: keychain_dump.json
+```
+
+```bash
+# Specify keychain file and password
+keychainbreaker dump -f /path/to/login.keychain-db -p "password"
+
+# Export to a specific file
+keychainbreaker dump -o result.json
+
+# Wrong password: still exports metadata (service, account, timestamps, certs)
+keychainbreaker dump -p "wrong"
+```
+
+### hash
+
+```bash
+# Export hash for offline cracking (no password needed)
+keychainbreaker hash
+# $keychain$*<salt_hex>*<iv_hex>*<ciphertext_hex>
+```
+
+## Go Library
+
+### Install
 
 ```bash
 go get github.com/moond4rk/keychainbreaker
@@ -28,7 +104,7 @@ go get github.com/moond4rk/keychainbreaker
 
 Requires Go 1.20+.
 
-## Quick Start
+#### Quick Start
 
 ```go
 // Open the default macOS login keychain
@@ -45,9 +121,9 @@ for _, p := range passwords {
 }
 ```
 
-## Usage
+### Usage
 
-### Open a Keychain
+#### Open a Keychain
 
 ```go
 kc, err := keychainbreaker.Open()                                      // default system keychain
@@ -55,14 +131,14 @@ kc, err := keychainbreaker.Open(keychainbreaker.WithFile("/path/to"))   // speci
 kc, err := keychainbreaker.Open(keychainbreaker.WithBytes(buf))         // from memory
 ```
 
-### Unlock
+#### Unlock
 
 ```go
 err = kc.Unlock(keychainbreaker.WithPassword("macos-login-password"))   // with password
 err = kc.Unlock(keychainbreaker.WithKey("hex-encoded-24-byte-key"))     // with master key
 ```
 
-### TryUnlock (partial extraction)
+#### TryUnlock (partial extraction)
 
 `TryUnlock` attempts to decrypt but does not block extraction on failure.
 When the password is wrong or unavailable, metadata (service, account,
@@ -84,7 +160,7 @@ if kc.Unlocked() {
 }
 ```
 
-### Extract Records
+#### Extract Records
 
 ```go
 genericPasswords, err := kc.GenericPasswords()     // app credentials
@@ -94,7 +170,7 @@ certificates, err := kc.Certificates()             // X.509 certificates
 hash, err := kc.PasswordHash()                     // offline cracking hash (no unlock needed)
 ```
 
-### Record Types
+#### Record Types
 
 <details>
 <summary>GenericPassword</summary>
