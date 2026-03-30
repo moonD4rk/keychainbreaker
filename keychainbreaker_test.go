@@ -264,9 +264,9 @@ func TestTryUnlock(t *testing.T) {
 
 			// Verify unlock result.
 			if tt.wantErr != nil {
-				assert.ErrorIs(t, err, tt.wantErr)
+				require.ErrorIs(t, err, tt.wantErr)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 			}
 			assert.Equal(t, tt.wantUnlock, kc.Unlocked())
 
@@ -354,7 +354,7 @@ func TestTryUnlockThenUnlock(t *testing.T) {
 
 	// TryUnlock with wrong password first.
 	err := kc.TryUnlock(WithPassword("wrong"))
-	assert.ErrorIs(t, err, ErrWrongKey)
+	require.ErrorIs(t, err, ErrWrongKey)
 	assert.False(t, kc.Unlocked())
 
 	// Unlock with correct password recovers full access.
@@ -373,13 +373,13 @@ func TestUnlockResetsAllowPartial(t *testing.T) {
 	kc := openTestKeychain(t)
 
 	// TryUnlock enables partial mode.
-	kc.TryUnlock()
+	require.NoError(t, kc.TryUnlock())
 	_, err := kc.GenericPasswords()
-	assert.NoError(t, err) // partial mode: no ErrLocked
+	require.NoError(t, err) // partial mode: no ErrLocked
 
 	// Unlock with wrong password resets to strict mode.
 	err = kc.Unlock(WithPassword("wrong"))
-	assert.ErrorIs(t, err, ErrWrongKey)
+	require.ErrorIs(t, err, ErrWrongKey)
 	assert.False(t, kc.Unlocked())
 
 	// Strict mode restored: extraction should return ErrLocked.
