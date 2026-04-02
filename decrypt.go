@@ -39,11 +39,11 @@ func kcDecrypt(key, iv, data []byte) ([]byte, error) {
 
 	pad := int(plain[len(plain)-1])
 	if pad == 0 || pad > blockSize {
-		return nil, fmt.Errorf("invalid padding value %d: %w", pad, ErrWrongKey)
+		return nil, fmt.Errorf("invalid padding value %d", pad)
 	}
 	for _, b := range plain[len(plain)-pad:] {
 		if int(b) != pad {
-			return nil, fmt.Errorf("padding verification failed: %w", ErrWrongKey)
+			return nil, fmt.Errorf("padding verification failed")
 		}
 	}
 	return plain[:len(plain)-pad], nil
