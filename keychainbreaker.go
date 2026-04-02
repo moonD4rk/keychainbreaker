@@ -63,7 +63,9 @@ func WithBytes(buf []byte) OpenOption {
 // By default, the library is silent (no-op logger).
 func WithLogger(l Logger) OpenOption {
 	return func(c *openConfig) {
-		c.logger = l
+		if l != nil {
+			c.logger = l
+		}
 	}
 }
 

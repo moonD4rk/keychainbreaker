@@ -72,11 +72,12 @@ func (kc *Keychain) unlock(opts ...UnlockOption) error {
 	if err != nil {
 		return err
 	}
-	kc.logger.Info("master key derived",
-		"method", deriveMethod(&cfg),
-		"iterations", pbkdf2Iter,
-		"keyLen", len(masterKey),
-	)
+	logFields := []any{"method", deriveMethod(&cfg)}
+	if cfg.passwordSet {
+		logFields = append(logFields, "iterations", pbkdf2Iter)
+	}
+	logFields = append(logFields, "keyLen", len(masterKey))
+	kc.logger.Info("master key derived", logFields...)
 
 	dbKey, err := kc.findWrappingKey(masterKey)
 	if err != nil {
