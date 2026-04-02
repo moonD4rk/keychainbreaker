@@ -33,14 +33,16 @@ type Keychain struct {
 	dbKey        []byte            // 24-byte database key (nil when locked)
 	keyList      map[string][]byte // SSGP label -> per-record key (empty until unlocked)
 	allowPartial bool              // allow extraction without successful unlock
+	logger       Logger
 }
 
 // OpenOption configures how to open a keychain.
 type OpenOption func(*openConfig)
 
 type openConfig struct {
-	path string
-	buf  []byte
+	path   string
+	buf    []byte
+	logger Logger
 }
 
 // WithFile specifies a keychain file path.
@@ -54,6 +56,16 @@ func WithFile(path string) OpenOption {
 func WithBytes(buf []byte) OpenOption {
 	return func(c *openConfig) {
 		c.buf = buf
+	}
+}
+
+// WithLogger sets a custom logger for diagnostic output.
+// By default, the library is silent (no-op logger).
+func WithLogger(l Logger) OpenOption {
+	return func(c *openConfig) {
+		if l != nil {
+			c.logger = l
+		}
 	}
 }
 
@@ -73,7 +85,9 @@ func WithBytes(buf []byte) OpenOption {
 //
 //	kc, err := keychainbreaker.Open(keychainbreaker.WithBytes(buf))
 func Open(opts ...OpenOption) (*Keychain, error) {
-	var cfg openConfig
+	cfg := openConfig{
+		logger: nopLogger{},
+	}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -83,7 +97,7 @@ func Open(opts ...OpenOption) (*Keychain, error) {
 		return nil, err
 	}
 
-	return parse(buf)
+	return parse(buf, cfg.logger)
 }
 
 func resolveInput(cfg *openConfig) ([]byte, error) {
@@ -109,7 +123,7 @@ func resolveInput(cfg *openConfig) ([]byte, error) {
 	}
 }
 
-func parse(buf []byte) (*Keychain, error) {
+func parse(buf []byte, logger Logger) (*Keychain, error) {
 	hdr, err := parseHeader(buf)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrParseFailed, err)
@@ -117,17 +131,23 @@ func parse(buf []byte) (*Keychain, error) {
 	if string(hdr.signature[:]) != keychainSignature {
 		return nil, ErrInvalidSignature
 	}
+	logger.Info("parsed header",
+		"signature", string(hdr.signature[:]),
+		"version", hdr.version,
+	)
 
 	_, tableOffsets, err := parseSchema(buf, hdr.schemaOff)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrParseFailed, err)
 	}
+	logger.Debug("parsed schema", "tableCount", len(tableOffsets))
 
 	kc := &Keychain{
 		buf:     buf,
 		header:  hdr,
 		tables:  make(map[uint32]*tableInfo),
 		keyList: make(map[string][]byte),
+		logger:  logger,
 	}
 
 	for _, off := range tableOffsets {
@@ -142,6 +162,20 @@ func parse(buf []byte) (*Keychain, error) {
 		if _, exists := kc.tables[ti.tableID]; !exists {
 			kc.tables[ti.tableID] = &ti
 		}
+	}
+
+	tableIDs := make([]uint32, 0, len(kc.tables))
+	for id := range kc.tables {
+		tableIDs = append(tableIDs, id)
+	}
+	sortUint32s(tableIDs)
+	for _, id := range tableIDs {
+		t := kc.tables[id]
+		logger.Debug("parsed table",
+			"name", tableIDName(id),
+			"id", fmt.Sprintf("0x%08X", id),
+			"records", len(t.recordOffsets),
+		)
 	}
 
 	schema, err := buildSchema(buf, kc.tables)
@@ -173,7 +207,58 @@ func (kc *Keychain) extractDBBlob() error {
 		return err
 	}
 	kc.dbBlob = blob
+
+	cipherLen := 0
+	if blob.totalLength > blob.startCryptoBlob {
+		cipherLen = int(blob.totalLength - blob.startCryptoBlob)
+	}
+	kc.logger.Info("parsed DBBlob",
+		"startCryptoBlob", blob.startCryptoBlob,
+		"totalLength", blob.totalLength,
+		"saltLen", len(blob.salt),
+		"ivLen", len(blob.iv),
+		"ciphertextLen", cipherLen,
+	)
 	return nil
+}
+
+func sortUint32s(s []uint32) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+}
+
+func tableIDName(id uint32) string {
+	switch id {
+	case tableSchemaInfo:
+		return "SchemaInfo"
+	case tableSchemaIndexes:
+		return "SchemaIndexes"
+	case tableSchemaAttributes:
+		return "SchemaAttributes"
+	case tableSchemaParsingModule:
+		return "SchemaParsingModule"
+	case tablePublicKey:
+		return "PublicKey"
+	case tablePrivateKey:
+		return "PrivateKey"
+	case tableSymmetricKey:
+		return "SymmetricKey"
+	case tableGenericPassword:
+		return "GenericPassword"
+	case tableInternetPassword:
+		return "InternetPassword"
+	case tableAppleSharePassword:
+		return "AppleSharePassword"
+	case tableX509Certificate:
+		return "X509Certificate"
+	case tableMetadata:
+		return "Metadata"
+	default:
+		return fmt.Sprintf("Unknown(0x%08X)", id)
+	}
 }
 
 // iterateRecords parses and returns all records from a table.
@@ -193,13 +278,22 @@ func (kc *Keychain) iterateRecords(tableID uint32) ([]*record, error) {
 	}
 
 	var records []*record
+	var skipped int
 	for _, recOffset := range table.recordOffsets {
 		absOffset := table.baseOffset + int(recOffset)
 		rec, err := parseRecord(kc.buf, absOffset, schema)
 		if err != nil {
+			skipped++
 			continue
 		}
 		records = append(records, rec)
+	}
+	if skipped > 0 {
+		kc.logger.Warn("records skipped during parse",
+			"table", tableIDName(tableID),
+			"skipped", skipped,
+			"total", len(table.recordOffsets),
+		)
 	}
 	return records, nil
 }
@@ -214,9 +308,10 @@ func (kc *Keychain) GenericPasswords() ([]GenericPassword, error) {
 		return nil, err
 	}
 
+	var decrypted, failed int
 	results := make([]GenericPassword, 0, len(records))
 	for _, rec := range records {
-		password, _ := kc.decryptBlob(rec)
+		password, err := kc.decryptBlob(rec)
 		gp := GenericPassword{
 			Service:     rec.stringAttr(attrServiceName),
 			Account:     rec.stringAttr(attrAccountName),
@@ -234,9 +329,17 @@ func (kc *Keychain) GenericPasswords() ([]GenericPassword, error) {
 			gp.PlainPassword = string(password)
 			gp.HexPassword = hex.EncodeToString(password)
 			gp.Base64Password = base64.StdEncoding.EncodeToString(password)
+			decrypted++
+		} else if err != nil {
+			failed++
 		}
 		results = append(results, gp)
 	}
+	kc.logger.Debug("GenericPasswords extracted",
+		"total", len(results),
+		"decrypted", decrypted,
+		"failed", failed,
+	)
 	return results, nil
 }
 
@@ -250,9 +353,10 @@ func (kc *Keychain) InternetPasswords() ([]InternetPassword, error) {
 		return nil, err
 	}
 
+	var decrypted, failed int
 	results := make([]InternetPassword, 0, len(records))
 	for _, rec := range records {
-		password, _ := kc.decryptBlob(rec)
+		password, err := kc.decryptBlob(rec)
 		ip := InternetPassword{
 			Server:         rec.stringAttr(attrServer),
 			Account:        rec.stringAttr(attrAccountName),
@@ -275,9 +379,17 @@ func (kc *Keychain) InternetPasswords() ([]InternetPassword, error) {
 			ip.PlainPassword = string(password)
 			ip.HexPassword = hex.EncodeToString(password)
 			ip.Base64Password = base64.StdEncoding.EncodeToString(password)
+			decrypted++
+		} else if err != nil {
+			failed++
 		}
 		results = append(results, ip)
 	}
+	kc.logger.Debug("InternetPasswords extracted",
+		"total", len(results),
+		"decrypted", decrypted,
+		"failed", failed,
+	)
 	return results, nil
 }
 
@@ -291,10 +403,12 @@ func (kc *Keychain) PrivateKeys() ([]PrivateKey, error) {
 		return nil, err
 	}
 
+	var decrypted, failed int
 	var results []PrivateKey
 	for _, rec := range records {
 		pk, err := kc.decryptPrivateKey(rec)
 		if err != nil {
+			failed++
 			if !kc.allowPartial {
 				continue
 			}
@@ -305,9 +419,16 @@ func (kc *Keychain) PrivateKeys() ([]PrivateKey, error) {
 				KeyType:   rec.uint32Attr(attrKeyType),
 				KeySize:   rec.uint32Attr(attrKeySizeInBits),
 			}
+		} else {
+			decrypted++
 		}
 		results = append(results, pk)
 	}
+	kc.logger.Debug("PrivateKeys extracted",
+		"total", len(results),
+		"decrypted", decrypted,
+		"failed", failed,
+	)
 	return results, nil
 }
 

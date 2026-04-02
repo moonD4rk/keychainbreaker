@@ -17,6 +17,7 @@ const (
 	flagPassword = "password"
 	flagKey      = "key"
 	flagOutput   = "output"
+	flagVerbose  = "verbose"
 )
 
 // NewRootCmd creates the root command with global flags.
@@ -38,6 +39,8 @@ macOS Keychain files (login.keychain-db).`,
 		"hex-encoded 24-byte master key")
 	root.PersistentFlags().StringP(flagOutput, "o", "",
 		"output file path (default: ./keychain_dump.json)")
+	root.PersistentFlags().BoolP(flagVerbose, "v", false,
+		"print verbose diagnostic output to stderr")
 
 	root.AddCommand(
 		NewDumpCmd(),
@@ -59,6 +62,11 @@ func openKeychain(cmd *cobra.Command) (*keychainbreaker.Keychain, error) {
 			return nil, fmt.Errorf("failed to determine user home directory: %w", err)
 		}
 		file = filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+	}
+
+	verbose, _ := cmd.Flags().GetBool(flagVerbose)
+	if verbose {
+		opts = append(opts, keychainbreaker.WithLogger(newCLILogger()))
 	}
 
 	fmt.Fprintf(os.Stderr, "Keychain: %s\n", file)

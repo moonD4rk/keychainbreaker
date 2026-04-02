@@ -10,8 +10,9 @@ import (
 type UnlockOption func(*unlockConfig)
 
 type unlockConfig struct {
-	hexKey   string
-	password string
+	hexKey      string
+	password    string
+	passwordSet bool
 }
 
 // WithKey unlocks using a raw hex-encoded 24-byte master key.
@@ -23,9 +24,11 @@ func WithKey(hexKey string) UnlockOption {
 
 // WithPassword unlocks using the keychain password.
 // The master key is derived via PBKDF2-HMAC-SHA1 with the salt from the keychain file.
+// An empty password is treated as a valid unlock attempt, not as "no password provided".
 func WithPassword(password string) UnlockOption {
 	return func(c *unlockConfig) {
 		c.password = password
+		c.passwordSet = true
 	}
 }
 
@@ -69,27 +72,48 @@ func (kc *Keychain) unlock(opts ...UnlockOption) error {
 	if err != nil {
 		return err
 	}
+	logFields := []any{"method", deriveMethod(&cfg)}
+	if cfg.passwordSet {
+		logFields = append(logFields, "iterations", pbkdf2Iter)
+	}
+	logFields = append(logFields, "keyLen", len(masterKey))
+	kc.logger.Info("master key derived", logFields...)
 
 	dbKey, err := kc.findWrappingKey(masterKey)
 	if err != nil {
+		kc.logger.Error("decrypt DB key failed", "error", err)
 		return err
 	}
+	kc.logger.Info("DB key decrypted", "keyLen", len(dbKey))
 
 	kc.dbKey = dbKey
 	if err := kc.generateKeyList(); err != nil {
 		kc.dbKey = nil
 		kc.keyList = make(map[string][]byte)
+		kc.logger.Error("generate key list failed", "error", err)
 		return err
 	}
+	kc.logger.Info("key list generated", "keyCount", len(kc.keyList))
 
 	return nil
+}
+
+func deriveMethod(cfg *unlockConfig) string {
+	switch {
+	case cfg.hexKey != "":
+		return "hex-key"
+	case cfg.passwordSet:
+		return "PBKDF2-SHA1"
+	default:
+		return "none"
+	}
 }
 
 func deriveMasterKey(cfg *unlockConfig, kc *Keychain) ([]byte, error) {
 	switch {
 	case cfg.hexKey != "":
 		return decodeHexKey(cfg.hexKey)
-	case cfg.password != "":
+	case cfg.passwordSet:
 		return generateMasterKey(cfg.password, kc.dbBlob.salt), nil
 	default:
 		return nil, fmt.Errorf("no unlock method provided")
@@ -115,6 +139,7 @@ func (kc *Keychain) findWrappingKey(master []byte) ([]byte, error) {
 	if start < 0 || end > len(kc.buf) || start >= end {
 		return nil, fmt.Errorf("%w: db blob cipher bounds invalid", ErrParseFailed)
 	}
+	kc.logger.Debug("decrypting DB key", "ciphertextLen", end-start)
 
 	plain, err := kcDecrypt(master, kc.dbBlob.iv, kc.buf[start:end])
 	if err != nil {
@@ -137,21 +162,31 @@ func (kc *Keychain) generateKeyList() error {
 		return fmt.Errorf("%w: no schema for SymmetricKey table", ErrParseFailed)
 	}
 
+	var skipped int
 	for _, recOffset := range symTable.recordOffsets {
 		absOffset := symTable.baseOffset + int(recOffset)
 		rec, err := parseRecord(kc.buf, absOffset, schema)
 		if err != nil {
+			skipped++
 			continue
 		}
 		index, ciphertext, iv, err := extractKeyBlob(rec)
 		if err != nil {
+			skipped++
 			continue
 		}
 		key, err := keyblobDecrypt(ciphertext, iv, kc.dbKey)
 		if err != nil || len(key) == 0 {
+			skipped++
 			continue
 		}
 		kc.keyList[string(index)] = key
+	}
+	if skipped > 0 {
+		kc.logger.Warn("symmetric key records skipped",
+			"skipped", skipped,
+			"total", len(symTable.recordOffsets),
+		)
 	}
 
 	if len(kc.keyList) == 0 {

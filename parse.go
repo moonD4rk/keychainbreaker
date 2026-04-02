@@ -58,17 +58,20 @@ const (
 	attrSerial         = "snbr"
 )
 
-// Record type constants (TableID values).
+// Record type constants (TableID values from Apple's CSSM framework).
 const (
-	tableSchemaInfo       uint32 = 0x00000000
-	tableSchemaAttributes uint32 = 0x00000002
-	tablePublicKey        uint32 = 0x0000000F
-	tablePrivateKey       uint32 = 0x00000010
-	tableSymmetricKey     uint32 = 0x00000011
-	tableGenericPassword  uint32 = 0x80000000
-	tableInternetPassword uint32 = 0x80000001
-	tableX509Certificate  uint32 = 0x80001000
-	tableMetadata         uint32 = 0x80008000
+	tableSchemaInfo          uint32 = 0x00000000
+	tableSchemaIndexes       uint32 = 0x00000001
+	tableSchemaAttributes    uint32 = 0x00000002
+	tableSchemaParsingModule uint32 = 0x00000003
+	tablePublicKey           uint32 = 0x0000000F
+	tablePrivateKey          uint32 = 0x00000010
+	tableSymmetricKey        uint32 = 0x00000011
+	tableGenericPassword     uint32 = 0x80000000
+	tableInternetPassword    uint32 = 0x80000001
+	tableAppleSharePassword  uint32 = 0x80000002
+	tableX509Certificate     uint32 = 0x80001000
+	tableMetadata            uint32 = 0x80008000
 )
 
 // applDBHeader is the 20-byte file header.
