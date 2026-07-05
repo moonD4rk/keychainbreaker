@@ -107,7 +107,7 @@ jobs:
           version: "~> v2"
           args: release --clean --skip=validate
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.release-token.outputs.token }}
           GORELEASER_CURRENT_TAG: ${{ github.event.inputs.version }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ steps.tap-token.outputs.token }}
 
