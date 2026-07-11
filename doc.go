@@ -40,5 +40,6 @@
 // Two unlock methods are supported:
 //
 //   - [WithPassword]: derives master key from password via PBKDF2-HMAC-SHA1
+//     (v1 keychains only; v2 returns [ErrUnsupportedBlobVersion])
 //   - [WithKey]: uses a hex-encoded 24-byte master key directly (from memory forensics)
 package keychainbreaker

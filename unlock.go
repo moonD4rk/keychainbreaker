@@ -24,6 +24,8 @@ func WithKey(hexKey string) UnlockOption {
 
 // WithPassword unlocks using the keychain password.
 // The master key is derived via PBKDF2-HMAC-SHA1 with the salt from the keychain file.
+// This works only for v1 (0x100) keychains; on macOS 26.4+ v2 (0x200) keychains it
+// returns ErrUnsupportedBlobVersion, and the master key must be supplied via WithKey.
 // An empty password is treated as a valid unlock attempt, not as "no password provided".
 func WithPassword(password string) UnlockOption {
 	return func(c *unlockConfig) {
@@ -114,6 +116,11 @@ func deriveMasterKey(cfg *unlockConfig, kc *Keychain) ([]byte, error) {
 	case cfg.hexKey != "":
 		return decodeHexKey(cfg.hexKey)
 	case cfg.passwordSet:
+		if kc.dbBlob.blobVersion != blobVersionV1 {
+			return nil, fmt.Errorf("%w: blobVersion=0x%08X; offline password unlock supports only v1 (0x%08X). "+
+				"Recover the 24-byte master key on the originating machine and pass it with WithKey",
+				ErrUnsupportedBlobVersion, kc.dbBlob.blobVersion, blobVersionV1)
+		}
 		return generateMasterKey(cfg.password, kc.dbBlob.salt), nil
 	default:
 		return nil, fmt.Errorf("no unlock method provided")

@@ -1,13 +1,8 @@
 # keychainbreaker
 
-[![Go CI](https://github.com/moonD4rk/keychainbreaker/actions/workflows/ci.yml/badge.svg)](https://github.com/moonD4rk/keychainbreaker/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/moonD4rk/keychainbreaker/branch/main/graph/badge.svg)](https://codecov.io/gh/moonD4rk/keychainbreaker)
-[![Go Reference](https://pkg.go.dev/badge/github.com/moond4rk/keychainbreaker.svg)](https://pkg.go.dev/github.com/moond4rk/keychainbreaker)
-[![Go Report Card](https://goreportcard.com/badge/github.com/moond4rk/keychainbreaker)](https://goreportcard.com/report/github.com/moond4rk/keychainbreaker)
-[![License](https://img.shields.io/github/license/moonD4rk/keychainbreaker)](https://github.com/moonD4rk/keychainbreaker/blob/main/LICENSE)
+[![Go CI](https://github.com/moonD4rk/keychainbreaker/actions/workflows/ci.yml/badge.svg)](https://github.com/moonD4rk/keychainbreaker/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/moonD4rk/keychainbreaker/branch/main/graph/badge.svg)](https://codecov.io/gh/moonD4rk/keychainbreaker) [![Go Reference](https://pkg.go.dev/badge/github.com/moond4rk/keychainbreaker.svg)](https://pkg.go.dev/github.com/moond4rk/keychainbreaker) [![License](https://img.shields.io/github/license/moonD4rk/keychainbreaker)](https://github.com/moonD4rk/keychainbreaker/blob/main/LICENSE)
 
-Go library for reading and decrypting macOS Keychain files (`login.keychain-db`).
-Supports OS X 10.6 (Snow Leopard) through macOS 26 (Tahoe).
+Go library for reading and decrypting macOS Keychain files (`login.keychain-db`). Supports OS X 10.6 (Snow Leopard) through macOS 26 (Tahoe).
 
 ## What It Does
 
@@ -60,8 +55,7 @@ Flags:
 
 ### dump
 
-Export all keychain data (passwords, keys, certificates) to a single JSON file.
-Passwords are output in three formats: plaintext, hex, and base64.
+Export all keychain data (passwords, keys, certificates) to a single JSON file. Passwords are output in three formats: plaintext, hex, and base64.
 
 ```
 $ keychainbreaker dump
@@ -138,11 +132,60 @@ err = kc.Unlock(keychainbreaker.WithPassword("macos-login-password"))   // with 
 err = kc.Unlock(keychainbreaker.WithKey("hex-encoded-24-byte-key"))     // with master key
 ```
 
+> **macOS 26.4+ (login keychain v2):** freshly re-keyed login keychains report blob version `0x200`. Offline password unlock no longer works for them: `WithPassword` returns `ErrUnsupportedBlobVersion` instead of a misleading "wrong password" error. Recover the 24-byte master key on the originating machine and use `WithKey`. Version 1 (`0x100`) keychains are unaffected.
+
+#### Recover the master key on macOS 26.4+ (v2)
+
+A v2 keychain can't be decrypted offline from the file and password alone, but its 24-byte master key can be captured on the **machine that created it** and then replayed offline with `WithKey` / `--key`. `securityd` still derives that key through `CSSM_DeriveKey`, so an lldb breakpoint on the running daemon exposes it.
+
+Requirements: macOS 26.4+ on **Apple Silicon**, an admin account, the login password, and [SIP temporarily disabled](https://developer.apple.com/documentation/security/disabling-and-enabling-system-integrity-protection) (re-enable it as soon as you're done).
+
+**1. Lock the keychain** so the next unlock re-derives the key:
+
+```bash
+security lock-keychain ~/Library/Keychains/login.keychain-db
+```
+
+**2. Attach lldb to `securityd`** and break on the deriver. Attaching to the root-owned daemon needs `sudo`; if `pgrep` returns more than one PID (e.g. with the iOS Simulator installed), pick the one from your login session:
+
+```bash
+sudo lldb -p "$(pgrep -x securityd)"
+```
+
+```
+(lldb) expression -l objective-c -- @import Security
+(lldb) breakpoint set -n CSSM_DeriveKey
+(lldb) continue
+```
+
+**3. Trigger a derive** from another shell (enter your login password when prompted):
+
+```bash
+security unlock-keychain ~/Library/Keychains/login.keychain-db
+```
+
+**4. Read the master key.** When the breakpoint hits, `$x6` holds the `DerivedKey` output pointer; step out so it gets filled in, then read 24 bytes of its `KeyData`:
+
+```
+(lldb) expr void *$derived = (void *)$x6
+(lldb) thread step-out
+(lldb) p *(CSSM_KEY *)$derived
+(lldb) memory read --format x --size 1 --count 24 `((CSSM_KEY *)$derived)->KeyData.Data`
+```
+
+The `p` line is a sanity check: expect `HeaderVersion = 2`, `KeyData.Length = 24`, and `BlobType = 0` -- any other `BlobType` means you captured the wrong key. Concatenate the 24 printed bytes into a 48-character hex string.
+
+**5. Replay it offline** (re-enable SIP first):
+
+```bash
+keychainbreaker dump --key=<48-char-hex>   # or in Go: kc.Unlock(keychainbreaker.WithKey("<hex>"))
+```
+
+The master key is stable per machine + password + keychain, so one capture is reusable. A worked demo with sample output is in [issue #18](https://github.com/moonD4rk/keychainbreaker/issues/18), where this method was contributed by [@gmazzola](https://github.com/gmazzola).
+
 #### TryUnlock (partial extraction)
 
-`TryUnlock` attempts to decrypt but does not block extraction on failure.
-When the password is wrong or unavailable, metadata (service, account,
-timestamps, etc.) is still returned with encrypted fields set to nil.
+`TryUnlock` attempts to decrypt but does not block extraction on failure. When the password is wrong or unavailable, metadata (service, account, timestamps, etc.) is still returned with encrypted fields set to nil.
 
 ```go
 // Wrong password: metadata still available, passwords nil
@@ -190,6 +233,7 @@ type GenericPassword struct {
     Modified    time.Time
 }
 ```
+
 </details>
 
 <details>
@@ -215,6 +259,7 @@ type InternetPassword struct {
     Modified       time.Time
 }
 ```
+
 </details>
 
 <details>
@@ -231,6 +276,7 @@ type PrivateKey struct {
     KeySize   uint32
 }
 ```
+
 </details>
 
 <details>
@@ -247,6 +293,7 @@ type Certificate struct {
     Serial    []byte
 }
 ```
+
 </details>
 
 ## How It Works
@@ -262,18 +309,17 @@ Password --> PBKDF2 --> Master Key --> DB Key --> Per-Record Keys --> Plaintext
 3. **Per-record keys** unwrapped using RFC 3217 Triple-DES Key Wrap
 4. **Passwords/keys** decrypted using per-record keys with 3DES-CBC
 
-The library dynamically discovers table schemas from the keychain file itself,
-making it robust across macOS versions (10.6 through 26).
+The library dynamically discovers table schemas from the keychain file itself, making it robust across macOS versions (10.6 through 26).
 
 See [RFC 001](rfcs/001-keychain-encryption.md) for the full encryption specification.
 
 ## Compatibility
 
-| Supported | Not Supported |
-|-----------|---------------|
-| `.keychain` and `.keychain-db` files | `keychain-2.db` (iCloud Keychain) |
-| OS X 10.6 through macOS 26 (Tahoe) | Secure Enclave protected keys |
-| Linux, macOS, Windows (cross-compile) | |
+| Supported                             | Not Supported                     |
+| ------------------------------------- | --------------------------------- |
+| `.keychain` and `.keychain-db` files  | `keychain-2.db` (iCloud Keychain) |
+| OS X 10.6 through macOS 26 (Tahoe)    | Secure Enclave protected keys     |
+| Linux, macOS, Windows (cross-compile) |                                   |
 
 ## License
 

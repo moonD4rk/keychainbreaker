@@ -213,6 +213,8 @@ func (kc *Keychain) extractDBBlob() error {
 		cipherLen = int(blob.totalLength - blob.startCryptoBlob)
 	}
 	kc.logger.Info("parsed DBBlob",
+		"magic", fmt.Sprintf("0x%08X", blob.magic),
+		"blobVersion", fmt.Sprintf("0x%08X", blob.blobVersion),
 		"startCryptoBlob", blob.startCryptoBlob,
 		"totalLength", blob.totalLength,
 		"saltLen", len(blob.salt),
@@ -550,6 +552,10 @@ func (kc *Keychain) decryptBlob(rec *record) ([]byte, error) {
 // Compatible with hashcat mode 23100 and John the Ripper.
 // Does not require Unlock.
 func (kc *Keychain) PasswordHash() (string, error) {
+	if kc.dbBlob.blobVersion != blobVersionV1 {
+		return "", fmt.Errorf("%w: blobVersion=0x%08X; offline hash cracking supports only v1 (0x%08X)",
+			ErrUnsupportedBlobVersion, kc.dbBlob.blobVersion, blobVersionV1)
+	}
 	start := kc.blobBaseAddr + int(kc.dbBlob.startCryptoBlob)
 	end := kc.blobBaseAddr + int(kc.dbBlob.totalLength)
 	if start >= end || end > len(kc.buf) {

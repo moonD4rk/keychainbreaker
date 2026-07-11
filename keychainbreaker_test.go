@@ -65,6 +65,14 @@ func TestPasswordHash(t *testing.T) {
 	)
 }
 
+func TestPasswordHashRejectedForV2(t *testing.T) {
+	kc := openTestKeychain(t)
+	kc.dbBlob.blobVersion = blobVersionV2
+
+	_, err := kc.PasswordHash()
+	assert.ErrorIs(t, err, ErrUnsupportedBlobVersion)
+}
+
 const (
 	// Derived from password "keychainbreaker-test" via PBKDF2-HMAC-SHA1.
 	testMasterKeyHex = "4557eb716bbf20200945109cf3b884af9aca72e890e47c07"
