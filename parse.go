@@ -155,8 +155,18 @@ func parseTable(buf []byte, offset int) (tableInfo, error) {
 	return t, nil
 }
 
+// Known DBBlob versions. v1 (0x100) derives the master key from the password via
+// PBKDF2 and is decryptable offline. v2 (0x200), introduced in macOS 26.4, cannot
+// be decrypted offline from the keychain file and password alone.
+const (
+	blobVersionV1 uint32 = 0x00000100
+	blobVersionV2 uint32 = 0x00000200
+)
+
 // dbBlob is the 92-byte database encryption blob from the Metadata table.
 type dbBlob struct {
+	magic           uint32
+	blobVersion     uint32
 	startCryptoBlob uint32
 	totalLength     uint32
 	salt            []byte // 20 bytes
@@ -168,6 +178,8 @@ func parseDBBlob(buf []byte) (dbBlob, error) {
 		return dbBlob{}, errors.New("db blob buffer too small")
 	}
 	return dbBlob{
+		magic:           binary.BigEndian.Uint32(buf[0:4]),
+		blobVersion:     binary.BigEndian.Uint32(buf[4:8]),
 		startCryptoBlob: binary.BigEndian.Uint32(buf[8:12]),
 		totalLength:     binary.BigEndian.Uint32(buf[12:16]),
 		salt:            append([]byte{}, buf[44:64]...),

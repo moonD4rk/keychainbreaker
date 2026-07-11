@@ -75,6 +75,8 @@ func TestParseDBBlob(t *testing.T) {
 	blob, err := parseDBBlob(blobBuf)
 	require.NoError(t, err)
 
+	assert.Equal(t, uint32(0xFADE0711), blob.magic)
+	assert.Equal(t, blobVersionV1, blob.blobVersion)
 	assert.Len(t, blob.salt, 20)
 	assert.Len(t, blob.iv, 8)
 	assert.Equal(t, uint32(120), blob.startCryptoBlob)

@@ -99,7 +99,7 @@ func openAndTryUnlock(cmd *cobra.Command) (*keychainbreaker.Keychain, error) {
 	}
 
 	if err := kc.TryUnlock(opt); err != nil {
-		if !errors.Is(err, keychainbreaker.ErrWrongKey) {
+		if !errors.Is(err, keychainbreaker.ErrWrongKey) && !errors.Is(err, keychainbreaker.ErrUnsupportedBlobVersion) {
 			return nil, err
 		}
 		fmt.Fprintf(os.Stderr, "Warning: %v, exporting metadata only\n", err)
