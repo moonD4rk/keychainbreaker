@@ -1,9 +1,6 @@
 # RFC 002: Go API Design
 
-Status: Implemented
-Author: @moonD4rk
-Date: 2026-03-27
-Updated: 2026-11-26
+Status: Implemented Author: @moonD4rk Date: 2026-03-27 Updated: 2026-11-26
 
 ## Summary
 
@@ -140,15 +137,15 @@ Every error wraps one of these where it applies, so callers use `errors.Is`. The
 
 ## 4. Internal Architecture
 
-| File          | Holds                                                                                     |
-| ------------- | ----------------------------------------------------------------------------------------- |
-| `keychain.go` | `Keychain`, `Open`, `OpenBytes`, `DefaultKeychainPath`, parsing order, `PasswordHash`     |
-| `records.go`  | the four extraction methods and per-record decryption                                     |
-| `unlock.go`   | `UnlockWithPassword`, `UnlockWithKey`, database key and record key recovery               |
-| `decrypt.go`  | 3DES-CBC, RFC 3217 key unwrapping, PBKDF2                                                 |
-| `parse.go`    | binary structures, all read through one bounds-checked `span` helper                      |
-| `schema.go`   | schema discovery and attribute decoding by format                                         |
-| `types.go`, `errors.go`, `logger.go` | the exported types, errors and logger interface                    |
+| File | Holds |
+| --- | --- |
+| `keychain.go` | `Keychain`, `Open`, `OpenBytes`, `DefaultKeychainPath`, parsing order, `PasswordHash` |
+| `records.go` | the four extraction methods and per-record decryption |
+| `unlock.go` | `UnlockWithPassword`, `UnlockWithKey`, database key and record key recovery |
+| `decrypt.go` | 3DES-CBC, RFC 3217 key unwrapping, PBKDF2 |
+| `parse.go` | binary structures, all read through one bounds-checked `span` helper |
+| `schema.go` | schema discovery and attribute decoding by format |
+| `types.go`, `errors.go`, `logger.go` | the exported types, errors and logger interface |
 
 ### Parsing
 
@@ -182,14 +179,14 @@ Reading a password record: parse its blob as SSGP, look up the record key by lab
 - Password: `keychainbreaker-test`
 - Master key: `4557eb716bbf20200945109cf3b884af9aca72e890e47c07`, PBKDF2 of the password
 
-| Type             | Service or server | Account | Secret        | Notes                                                       |
-| ---------------- | ----------------- | ------- | ------------- | ----------------------------------------------------------- |
-| GenericPassword  | moond4rk.com      | admin   | password#123  | description, comment, creator `mD4k`, type `note`           |
-| GenericPassword  | HackBrowserData   | admin   | password#123  | minimal                                                     |
-| InternetPassword | moond4rk.com:443  | admin   | password#123  | protocol `htps`, auth type `dflt`, path `/login`, all fields |
-| InternetPassword | moond4rk.com:445  | admin   | password#123  | protocol `smb `, minimal                                    |
-| PrivateKey       | 93B7C5C0          | -       | RSA 2048-bit  | 20-byte label                                               |
-| X509Certificate  | keychainbreaker-test | -    | self-signed   | -                                                           |
+| Type | Service or server | Account | Secret | Notes |
+| --- | --- | --- | --- | --- |
+| GenericPassword | moond4rk.com | admin | password#123 | description, comment, creator `mD4k`, type `note` |
+| GenericPassword | HackBrowserData | admin | password#123 | minimal |
+| InternetPassword | moond4rk.com:443 | admin | password#123 | protocol `htps`, auth type `dflt`, path `/login`, all fields |
+| InternetPassword | moond4rk.com:445 | admin | password#123 | protocol `smb `, minimal |
+| PrivateKey | 93B7C5C0 | - | RSA 2048-bit | 20-byte label |
+| X509Certificate | keychainbreaker-test | - | self-signed | - |
 
 ### Coverage
 
