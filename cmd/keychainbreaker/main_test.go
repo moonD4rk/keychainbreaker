@@ -86,8 +86,10 @@ func TestDumpWritesPrivateFile(t *testing.T) {
 	}
 	for _, p := range d.InternetPasswords {
 		assert.Equal(t, secret, p.Password, p.Protocol)
+		assert.Equal(t, "dflt", p.AuthType, p.Protocol)
 	}
 	assert.NotEmpty(t, d.PrivateKeys[0].DataHex)
+	assert.Len(t, d.PrivateKeys[0].LabelHex, 40)
 	assert.Equal(t, "keychainbreaker-test", d.Certificates[0].PrintName)
 }
 
@@ -115,6 +117,19 @@ func TestDumpWithWrongPasswordExportsMetadata(t *testing.T) {
 		assert.NotEmpty(t, p.Service)
 		assert.Empty(t, p.Password, p.Service)
 		assert.Empty(t, p.HexPassword, p.Service)
+	}
+}
+
+func TestDumpRejectsMalformedKeys(t *testing.T) {
+	tests := map[string]string{
+		"not hex":              "decode --key",
+		"0x" + fixtureKey[:46]: "24",
+	}
+	for key, want := range tests {
+		res := run(t, "", "dump", "-f", fixture, "--key", key, "-o", "-")
+		require.Error(t, res.err, key)
+		assert.Contains(t, res.err.Error(), want, key)
+		assert.Empty(t, res.stdout, key)
 	}
 }
 

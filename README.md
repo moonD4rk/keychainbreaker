@@ -111,47 +111,53 @@ The format is accepted by hashcat (mode 23100) and John the Ripper.
 go get github.com/moond4rk/keychainbreaker
 ```
 
-Requires Go 1.20+.
+Requires Go 1.20+. The library depends on nothing outside the standard library.
 
-#### Quick Start
+### Quick Start
 
 ```go
-// Open the default macOS login keychain
-kc, err := keychainbreaker.Open()
-
-// Unlock with the user's macOS login password
-err = kc.Unlock(keychainbreaker.WithPassword("your-macos-login-password"))
-
-// Extract all saved passwords
+path, err := keychainbreaker.DefaultKeychainPath() // ~/Library/Keychains/login.keychain-db
+if err != nil {
+    return err
+}
+kc, err := keychainbreaker.Open(path)
+if err != nil {
+    return err
+}
+if err := kc.UnlockWithPassword("your-macos-login-password"); err != nil {
+    return err
+}
 passwords, err := kc.GenericPasswords()
+if err != nil {
+    return err
+}
 for _, p := range passwords {
-    fmt.Printf("Service: %s, Account: %s, Password: %s\n",
-        p.Service, p.Account, p.Password)
+    fmt.Printf("%s %s %s\n", p.Service, p.Account, p.Password)
 }
 ```
 
-### Usage
-
-#### Open a Keychain
+### Open
 
 ```go
-kc, err := keychainbreaker.Open()                                      // default system keychain
-kc, err := keychainbreaker.Open(keychainbreaker.WithFile("/path/to"))   // specific file
-kc, err := keychainbreaker.Open(keychainbreaker.WithBytes(buf))         // from memory
+kc, err := keychainbreaker.Open("/path/to/login.keychain-db")             // a file
+kc, err := keychainbreaker.OpenBytes(buf)                                // a keychain already in memory; buf is copied
+kc, err := keychainbreaker.Open(path, keychainbreaker.WithLogger(logger)) // diagnostics, e.g. to a *slog.Logger
 ```
 
-#### Unlock
+### Unlock
 
 ```go
-err = kc.Unlock(keychainbreaker.WithPassword("macos-login-password"))   // with password
-err = kc.Unlock(keychainbreaker.WithKey("hex-encoded-24-byte-key"))     // with master key
+err := kc.UnlockWithPassword("macos-login-password") // derives the master key with PBKDF2-HMAC-SHA1
+err := kc.UnlockWithKey(masterKey)                   // the 24-byte master key itself
 ```
 
-> **macOS 26.4+ (login keychain v2):** freshly re-keyed login keychains report blob version `0x200`. Offline password unlock no longer works for them: `WithPassword` returns `ErrUnsupportedBlobVersion` instead of a misleading "wrong password" error. Recover the 24-byte master key on the originating machine and use `WithKey`. Version 1 (`0x100`) keychains are unaffected.
+Both return `ErrWrongKey` for a wrong credential. A failed attempt leaves the keychain as it was, so another credential can be tried; `kc.Unlocked()` reports whether one succeeded.
 
-#### Recover the master key on macOS 26.4+ (v2)
+> **macOS 26.4+ (login keychain v2):** freshly re-keyed login keychains report blob version `0x200`. Offline password unlock no longer works for them: `UnlockWithPassword` returns `ErrUnsupportedBlobVersion` instead of a misleading "wrong password" error. Recover the 24-byte master key on the originating machine and use `UnlockWithKey`. Version 1 (`0x100`) keychains are unaffected.
 
-A v2 keychain can't be decrypted offline from the file and password alone, but its 24-byte master key can be captured on the **machine that created it** and then replayed offline with `WithKey` / `--key`. `securityd` still derives that key through `CSSM_DeriveKey`, so an lldb breakpoint on the running daemon exposes it.
+### Recover the master key on macOS 26.4+ (v2)
+
+A v2 keychain can't be decrypted offline from the file and password alone, but its 24-byte master key can be captured on the **machine that created it** and then replayed offline with `UnlockWithKey` / `--key`. `securityd` still derives that key through `CSSM_DeriveKey`, so an lldb breakpoint on the running daemon exposes it.
 
 Requirements: macOS 26.4+ on **Apple Silicon**, an admin account, the login password, and [SIP temporarily disabled](https://developer.apple.com/documentation/security/disabling-and-enabling-system-integrity-protection) (re-enable it as soon as you're done).
 
@@ -193,40 +199,30 @@ The `p` line is a sanity check: expect `HeaderVersion = 2`, `KeyData.Length = 24
 **5. Replay it offline** (re-enable SIP first):
 
 ```bash
-keychainbreaker dump --key=<48-char-hex>   # or in Go: kc.Unlock(keychainbreaker.WithKey("<hex>"))
+keychainbreaker dump --key=<48-char-hex>
+```
+
+```go
+key, err := hex.DecodeString("<48-char-hex>")
+if err != nil {
+    return err
+}
+err = kc.UnlockWithKey(key)
 ```
 
 The master key is stable per machine + password + keychain, so one capture is reusable. A worked demo with sample output is in [issue #18](https://github.com/moonD4rk/keychainbreaker/issues/18), where this method was contributed by [@gmazzola](https://github.com/gmazzola).
 
-#### TryUnlock (partial extraction)
-
-`TryUnlock` attempts to decrypt but does not block extraction on failure. When the password is wrong or unavailable, metadata (service, account, timestamps, etc.) is still returned with encrypted fields set to nil.
+### Read Records
 
 ```go
-// Wrong password: metadata still available, passwords nil
-err = kc.TryUnlock(keychainbreaker.WithPassword("maybe-wrong"))
-passwords, _ := kc.GenericPasswords()   // passwords[0].Service = "moond4rk.com"
-                                        // passwords[0].Password = nil
-
-// No credential: just metadata
-kc.TryUnlock()
-passwords, _ := kc.GenericPasswords()
-
-// Check if decryption succeeded
-if kc.Unlocked() {
-    // full data available
-}
+genericPasswords, err := kc.GenericPasswords()   // application passwords
+internetPasswords, err := kc.InternetPasswords() // website, server and file share passwords
+privateKeys, err := kc.PrivateKeys()             // PKCS#8 private keys
+certificates, err := kc.Certificates()           // DER-encoded X.509 certificates
+hash, err := kc.PasswordHash()                   // for hashcat and John the Ripper; needs no unlock
 ```
 
-#### Extract Records
-
-```go
-genericPasswords, err := kc.GenericPasswords()     // app credentials
-internetPasswords, err := kc.InternetPasswords()   // web/network credentials
-privateKeys, err := kc.PrivateKeys()               // encrypted private keys
-certificates, err := kc.Certificates()             // X.509 certificates
-hash, err := kc.PasswordHash()                     // offline cracking hash (no unlock needed)
-```
+Records do not wait for an unlock: every record carries its metadata (service, account, timestamps and so on) from the start, and only the secrets, passwords and private key data, stay nil until an unlock succeeds or when a record cannot be decrypted. An empty password is an empty, non-nil slice. Certificates are not encrypted, so they are always complete. A `Keychain` is safe for concurrent use.
 
 #### Record Types
 
@@ -237,11 +233,11 @@ hash, err := kc.PasswordHash()                     // offline cracking hash (no 
 type GenericPassword struct {
     Service     string
     Account     string
-    Password    []byte    // raw bytes; caller decides encoding
+    Password    []byte // nil while locked or when the record cannot be decrypted
     Description string
     Comment     string
-    Creator     string
-    Type        string
+    Creator     string // four-character code
+    Type        string // four-character code
     PrintName   string
     Alias       string
     Created     time.Time
@@ -258,10 +254,10 @@ type GenericPassword struct {
 type InternetPassword struct {
     Server         string
     Account        string
-    Password       []byte
+    Password       []byte // nil while locked or when the record cannot be decrypted
     SecurityDomain string
-    Protocol       string    // "htps", "smb ", etc.
-    AuthType       string
+    Protocol       string // four-character code, such as "htps" or "smb "
+    AuthType       string // four-character code, such as "dflt"
     Port           uint32
     Path           string
     Description    string
@@ -282,13 +278,12 @@ type InternetPassword struct {
 
 ```go
 type PrivateKey struct {
-    Name      string // first 12 bytes of decrypted data
-    Data      []byte // raw key material (PKCS#8)
+    Data      []byte // PKCS#8; nil while locked or when the record cannot be decrypted
     PrintName string
-    Label     string
+    Label     []byte // usually the SHA-1 hash of the public key
     KeyClass  uint32
     KeyType   uint32
-    KeySize   uint32
+    KeySize   uint32 // in bits
 }
 ```
 
@@ -299,12 +294,12 @@ type PrivateKey struct {
 
 ```go
 type Certificate struct {
-    Data      []byte // raw DER-encoded certificate
+    Data      []byte // DER-encoded certificate
     Type      uint32
     Encoding  uint32
     PrintName string
-    Subject   []byte
-    Issuer    []byte
+    Subject   []byte // DER-encoded subject name
+    Issuer    []byte // DER-encoded issuer name
     Serial    []byte
 }
 ```

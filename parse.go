@@ -5,60 +5,33 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"strings"
-	"time"
 )
 
 const (
-	headerSize     = 20
-	schemaSize     = 8
-	tableHeaderLen = 28
-	dbBlobSize     = 92
-	keyBlobLen     = 24
-	ssgpHeaderLen  = 28
-	atomSize       = 4
+	uint32Len               = 4
+	fileHeaderLen           = 20
+	tableDirectoryHeaderLen = 8
+	tableHeaderLen          = 28
+	recordHeaderWords       = 6 // size, number, two unknown words, blob size, reserved
+	dbBlobLen               = 92
+	keyBlobHeaderLen        = 24
+	ssgpHeaderLen           = 28
+	ssgpLabelLen            = 20 // "ssgp" followed by a 16-byte label
+	timeDateLen             = 16
 
 	keychainSignature  = "kych"
 	secureStorageGroup = "ssgp"
 	keyBlobMagic       = 0xFADE0711
 
-	ssgpMagicOffset   = 8  // offset from blob.totalLength to SSGP magic ("ssgp")
-	privateKeyNameLen = 12 // first N bytes of decrypted private key data
+	// metadataDBBlobOffset locates the database blob inside the Metadata table.
+	metadataDBBlobOffset = 0x38
+	// privateKeyPrefixLen is the length of the prefix an unwrapped private key carries before its PKCS#8 data.
+	privateKeyPrefixLen = 12
+	// wrappedKeyLabelGap separates the end of a symmetric key blob from the SSGP label it is filed under.
+	wrappedKeyLabelGap = 8
 )
 
-// Attribute name constants used by record extraction.
-// Most are FourCC codes from Apple's CSSM framework;
-// some (PrintName, Alias, Label) are string names from SchemaAttributes.
-const (
-	attrServiceName    = "svce"
-	attrAccountName    = "acct"
-	attrDescription    = "desc"
-	attrComment        = "icmt"
-	attrCreator        = "crtr"
-	attrType           = "type"
-	attrPrintName      = "PrintName"
-	attrAlias          = "Alias"
-	attrCreated        = "cdat"
-	attrModified       = "mdat"
-	attrServer         = "srvr"
-	attrSecurityDomain = "sdmn"
-	attrProtocol       = "ptcl"
-	attrAuthType       = "atyp"
-	attrPort           = "port"
-	attrPath           = "path"
-	attrLabel          = "Label"
-	attrKeyClass       = "KeyClass"
-	attrKeyType        = "KeyType"
-	attrKeySizeInBits  = "KeySizeInBits"
-	attrCertType       = "ctyp"
-	attrCertEncoding   = "cenc"
-	attrCertLabel      = "labl" // certificate table uses FourCC, not "PrintName"
-	attrSubject        = "subj"
-	attrIssuer         = "issu"
-	attrSerial         = "snbr"
-)
-
-// Record type constants (TableID values from Apple's CSSM framework).
+// Table IDs (CSSM record types).
 const (
 	tableSchemaInfo          uint32 = 0x00000000
 	tableSchemaIndexes       uint32 = 0x00000001
@@ -74,80 +47,92 @@ const (
 	tableMetadata            uint32 = 0x80008000
 )
 
-// applDBHeader is the 20-byte file header.
-type applDBHeader struct {
-	signature  [4]byte
-	version    uint32
-	headerSize uint32
-	schemaOff  uint32
-	authOff    uint32
+// Database blob versions. Version 0x100 derives the master key from the password with PBKDF2 and can be decrypted
+// offline; version 0x200, introduced in macOS 26.4, cannot be decrypted from the file and the password alone.
+const (
+	blobVersionV1 uint32 = 0x00000100
+	blobVersionV2 uint32 = 0x00000200
+)
+
+// span returns buf[off:off+n] when that range lies within buf, without overflowing on hostile offsets.
+func span(buf []byte, off, n int) ([]byte, bool) {
+	if off < 0 || n < 0 || off > len(buf) || n > len(buf)-off {
+		return nil, false
+	}
+	return buf[off : off+n], true
 }
 
-func parseHeader(buf []byte) (applDBHeader, error) {
-	if len(buf) < headerSize {
-		return applDBHeader{}, errors.New("file too small for header")
+func readUint32(buf []byte, off int) (uint32, bool) {
+	b, ok := span(buf, off, uint32Len)
+	if !ok {
+		return 0, false
 	}
-	var h applDBHeader
-	copy(h.signature[:], buf[:4])
-	h.version = binary.BigEndian.Uint32(buf[4:8])
-	h.headerSize = binary.BigEndian.Uint32(buf[8:12])
-	h.schemaOff = binary.BigEndian.Uint32(buf[12:16])
-	h.authOff = binary.BigEndian.Uint32(buf[16:20])
+	return binary.BigEndian.Uint32(b), true
+}
+
+type fileHeader struct {
+	signature            [4]byte
+	version              uint32
+	tableDirectoryOffset uint32
+}
+
+func parseFileHeader(buf []byte) (fileHeader, error) {
+	b, ok := span(buf, 0, fileHeaderLen)
+	if !ok {
+		return fileHeader{}, errors.New("file too small for the header")
+	}
+	var h fileHeader
+	copy(h.signature[:], b[:4])
+	h.version = binary.BigEndian.Uint32(b[4:8])
+	h.tableDirectoryOffset = binary.BigEndian.Uint32(b[12:16])
 	return h, nil
 }
 
-// applDBSchema holds the table count and offsets.
-type applDBSchema struct {
-	schemaSize uint32
-	tableCount uint32
-}
-
-func parseSchema(buf []byte, offset uint32) (applDBSchema, []uint32, error) {
-	start := int(offset)
-	if start+schemaSize > len(buf) {
-		return applDBSchema{}, nil, errors.New("schema offset exceeds file size")
+// parseTableDirectory returns the absolute offsets of the tables the directory at offset lists.
+func parseTableDirectory(buf []byte, offset uint32) ([]int, error) {
+	base := int(offset)
+	count, ok := readUint32(buf, base+uint32Len)
+	if !ok {
+		return nil, errors.New("table directory exceeds the file")
 	}
-	s := applDBSchema{
-		schemaSize: binary.BigEndian.Uint32(buf[start : start+4]),
-		tableCount: binary.BigEndian.Uint32(buf[start+4 : start+8]),
+	list := base + tableDirectoryHeaderLen
+	if available := (len(buf) - list) / uint32Len; list > len(buf) || int64(count) > int64(available) {
+		return nil, fmt.Errorf("table directory lists %d tables, more than the file holds", count)
 	}
-	base := headerSize + schemaSize
-	offsets := make([]uint32, s.tableCount)
-	for i := 0; i < int(s.tableCount); i++ {
-		pos := base + i*atomSize
-		if pos+atomSize > len(buf) {
-			return applDBSchema{}, nil, errors.New("table list exceeds file size")
+	offsets := make([]int, 0, count)
+	for i := 0; i < int(count); i++ {
+		off, _ := readUint32(buf, list+i*uint32Len)
+		if off != 0 {
+			offsets = append(offsets, base+int(off))
 		}
-		offsets[i] = binary.BigEndian.Uint32(buf[pos : pos+atomSize])
 	}
-	return s, offsets, nil
+	return offsets, nil
 }
 
-// tableInfo holds a parsed table header and its record offsets.
-type tableInfo struct {
-	tableID       uint32
-	recordCount   uint32
-	recordOffsets []uint32
-	baseOffset    int // absolute offset of this table in the buffer
+// table is one table of the keychain database, with the schema of its records once schemas are discovered.
+type table struct {
+	id            uint32
+	offset        int      // absolute offset of the table in the file
+	recordOffsets []uint32 // relative to offset
+	schema        *tableSchema
 }
 
-func parseTable(buf []byte, offset int) (tableInfo, error) {
-	if offset+tableHeaderLen > len(buf) {
-		return tableInfo{}, errors.New("table header exceeds file size")
+func parseTable(buf []byte, offset int) (*table, error) {
+	header, ok := span(buf, offset, tableHeaderLen)
+	if !ok {
+		return nil, errors.New("table header exceeds the file")
 	}
-	data := buf[offset : offset+tableHeaderLen]
-	t := tableInfo{
-		tableID:     binary.BigEndian.Uint32(data[4:8]),
-		recordCount: binary.BigEndian.Uint32(data[8:12]),
-		baseOffset:  offset,
+	t := &table{
+		id:     binary.BigEndian.Uint32(header[4:8]),
+		offset: offset,
 	}
-	recBase := offset + tableHeaderLen
-	for i := 0; i < int(t.recordCount); i++ {
-		pos := recBase + i*atomSize
-		if pos+atomSize > len(buf) {
-			break
-		}
-		v := binary.BigEndian.Uint32(buf[pos : pos+atomSize])
+	list := offset + tableHeaderLen
+	count := int64(binary.BigEndian.Uint32(header[8:12]))
+	if available := int64((len(buf) - list) / uint32Len); count > available {
+		count = available
+	}
+	for i := 0; i < int(count); i++ {
+		v, _ := readUint32(buf, list+i*uint32Len)
 		if v != 0 && v%4 == 0 {
 			t.recordOffsets = append(t.recordOffsets, v)
 		}
@@ -155,200 +140,124 @@ func parseTable(buf []byte, offset int) (tableInfo, error) {
 	return t, nil
 }
 
-// Known DBBlob versions. v1 (0x100) derives the master key from the password via
-// PBKDF2 and is decryptable offline. v2 (0x200), introduced in macOS 26.4, cannot
-// be decrypted offline from the keychain file and password alone.
-const (
-	blobVersionV1 uint32 = 0x00000100
-	blobVersionV2 uint32 = 0x00000200
-)
-
-// dbBlob is the 92-byte database encryption blob from the Metadata table.
+// dbBlob is the header of the database blob in the Metadata table, which wraps the database key.
 type dbBlob struct {
-	magic           uint32
-	blobVersion     uint32
-	startCryptoBlob uint32
-	totalLength     uint32
-	salt            []byte // 20 bytes
-	iv              []byte // 8 bytes
+	magic       uint32
+	version     uint32
+	cryptoStart uint32 // offset of the wrapped database key, from the start of the blob
+	totalLength uint32
+	salt        []byte // 20 bytes
+	iv          []byte // 8 bytes
 }
 
-func parseDBBlob(buf []byte) (dbBlob, error) {
-	if len(buf) < dbBlobSize {
-		return dbBlob{}, errors.New("db blob buffer too small")
+func parseDBBlob(buf []byte, offset int) (dbBlob, error) {
+	b, ok := span(buf, offset, dbBlobLen)
+	if !ok {
+		return dbBlob{}, errors.New("database blob exceeds the file")
 	}
 	return dbBlob{
-		magic:           binary.BigEndian.Uint32(buf[0:4]),
-		blobVersion:     binary.BigEndian.Uint32(buf[4:8]),
-		startCryptoBlob: binary.BigEndian.Uint32(buf[8:12]),
-		totalLength:     binary.BigEndian.Uint32(buf[12:16]),
-		salt:            append([]byte{}, buf[44:64]...),
-		iv:              append([]byte{}, buf[64:72]...),
+		magic:       binary.BigEndian.Uint32(b[0:4]),
+		version:     binary.BigEndian.Uint32(b[4:8]),
+		cryptoStart: binary.BigEndian.Uint32(b[8:12]),
+		totalLength: binary.BigEndian.Uint32(b[12:16]),
+		salt:        bytes.Clone(b[44:64]),
+		iv:          bytes.Clone(b[64:72]),
 	}, nil
 }
 
-// ssgpBlock represents a Secure Storage Group Password structure.
-type ssgpBlock struct {
-	magic             []byte // 4 bytes
-	label             []byte // 16 bytes
-	iv                []byte // 8 bytes
-	encryptedPassword []byte
+// ssgp is a Secure Storage Group Password: the encrypted password of a password record, filed under a label that
+// names its record key.
+type ssgp struct {
+	label      []byte // "ssgp" and the 16-byte label, the key of recordKeys
+	iv         []byte
+	ciphertext []byte
 }
 
-func parseSSGP(buf []byte) (*ssgpBlock, error) {
+func parseSSGP(buf []byte) (ssgp, error) {
 	if len(buf) < ssgpHeaderLen {
-		return nil, errors.New("ssgp buffer too small")
+		return ssgp{}, errors.New("SSGP block too small")
 	}
-	return &ssgpBlock{
-		magic:             append([]byte{}, buf[0:4]...),
-		label:             append([]byte{}, buf[4:20]...),
-		iv:                append([]byte{}, buf[20:28]...),
-		encryptedPassword: append([]byte{}, buf[28:]...),
+	if string(buf[:4]) != secureStorageGroup {
+		return ssgp{}, fmt.Errorf("invalid SSGP magic %q", buf[:4])
+	}
+	return ssgp{
+		label:      buf[:ssgpLabelLen],
+		iv:         buf[ssgpLabelLen:ssgpHeaderLen],
+		ciphertext: buf[ssgpHeaderLen:],
 	}, nil
 }
 
-// keyBlobInfo holds parsed key blob data from a SymmetricKey record.
-type keyBlobInfo struct {
-	magic           uint32
-	startCryptoBlob uint32
-	totalLength     uint32
-	iv              []byte // 8 bytes
+// keyBlobHeader starts every wrapped key: the database blob's key, symmetric keys and private keys.
+type keyBlobHeader struct {
+	magic       uint32
+	cryptoStart uint32
+	totalLength uint32
+	iv          []byte
 }
 
-func parseKeyBlob(buf []byte) (keyBlobInfo, error) {
-	if len(buf) < keyBlobLen {
-		return keyBlobInfo{}, errors.New("key blob buffer too small")
+func parseKeyBlobHeader(buf []byte) (keyBlobHeader, error) {
+	b, ok := span(buf, 0, keyBlobHeaderLen)
+	if !ok {
+		return keyBlobHeader{}, errors.New("key blob too small")
 	}
-	return keyBlobInfo{
-		magic:           binary.BigEndian.Uint32(buf[0:4]),
-		startCryptoBlob: binary.BigEndian.Uint32(buf[8:12]),
-		totalLength:     binary.BigEndian.Uint32(buf[12:16]),
-		iv:              append([]byte{}, buf[16:24]...),
-	}, nil
+	h := keyBlobHeader{
+		magic:       binary.BigEndian.Uint32(b[0:4]),
+		cryptoStart: binary.BigEndian.Uint32(b[8:12]),
+		totalLength: binary.BigEndian.Uint32(b[12:16]),
+		iv:          b[16:24],
+	}
+	if h.magic != keyBlobMagic {
+		return keyBlobHeader{}, fmt.Errorf("unexpected key blob magic 0x%08X", h.magic)
+	}
+	return h, nil
 }
 
-// record represents a parsed keychain record with dynamic attribute access.
+// ciphertext returns the wrapped key that follows the header in buf.
+func (h keyBlobHeader) ciphertext(buf []byte) ([]byte, error) {
+	b, ok := span(buf, int(h.cryptoStart), int(h.totalLength)-int(h.cryptoStart))
+	if !ok || len(b) == 0 {
+		return nil, errors.New("wrapped key out of bounds")
+	}
+	return b, nil
+}
+
+// record is one row of a table, read through the table's schema.
 type record struct {
-	buf         []byte   // full record bytes
-	blobData    []byte   // blob area (blobSize bytes after header)
-	rawPayload  []byte   // all bytes after header (blob + attribute data)
-	attrOffsets []uint32 // attribute offsets from header
+	buf         []byte   // the whole record
+	blob        []byte   // the blob area after the header; nil when empty or truncated
+	payload     []byte   // everything after the header: the blob and the attribute data
+	attrOffsets []uint32 // 1-based offsets of the attribute values, in schema order
 	schema      *tableSchema
 }
 
-const recordFixedFields = 6 // RecSize, RecNumber, unk1, unk2, BlobSize, Reserved
-
 func parseRecord(buf []byte, offset int, schema *tableSchema) (*record, error) {
-	if offset+atomSize > len(buf) {
-		return nil, errors.New("record offset exceeds buffer")
+	size, ok := readUint32(buf, offset)
+	if !ok {
+		return nil, errors.New("record offset exceeds the file")
 	}
-	recSize := int(binary.BigEndian.Uint32(buf[offset : offset+atomSize]))
-	if recSize == 0 || offset+recSize > len(buf) {
+	recBuf, ok := span(buf, offset, int(size))
+	if !ok || size == 0 {
 		return nil, errors.New("invalid record size")
 	}
-	recBuf := buf[offset : offset+recSize]
 
 	attrCount := len(schema.attrs)
-	headerLen := (recordFixedFields + attrCount) * atomSize
+	headerLen := (recordHeaderWords + attrCount) * uint32Len
 	if len(recBuf) < headerLen {
-		return nil, fmt.Errorf("record too small for header: need %d, got %d", headerLen, len(recBuf))
+		return nil, fmt.Errorf("record too small for its header: need %d bytes, have %d", headerLen, len(recBuf))
 	}
-
-	blobSize := int(binary.BigEndian.Uint32(recBuf[16:20]))
-
 	attrOffsets := make([]uint32, attrCount)
-	for i := 0; i < attrCount; i++ {
-		pos := (recordFixedFields + i) * atomSize
-		attrOffsets[i] = binary.BigEndian.Uint32(recBuf[pos : pos+atomSize])
+	for i := range attrOffsets {
+		attrOffsets[i] = binary.BigEndian.Uint32(recBuf[(recordHeaderWords+i)*uint32Len:])
 	}
-
-	var blobData []byte
-	if blobSize > 0 && headerLen+blobSize <= len(recBuf) {
-		blobData = recBuf[headerLen : headerLen+blobSize]
+	blob, _ := span(recBuf, headerLen, int(binary.BigEndian.Uint32(recBuf[16:20])))
+	if len(blob) == 0 {
+		blob = nil
 	}
-
 	return &record{
 		buf:         recBuf,
-		blobData:    blobData,
-		rawPayload:  recBuf[headerLen:],
+		blob:        blob,
+		payload:     recBuf[headerLen:],
 		attrOffsets: attrOffsets,
 		schema:      schema,
 	}, nil
-}
-
-// attrOffset resolves the byte offset for a named attribute.
-// Returns -1 if the attribute is not present or not found.
-func (r *record) attrOffset(name string) int {
-	idx := r.schema.attrIndex(name)
-	if idx < 0 || idx >= len(r.attrOffsets) {
-		return -1
-	}
-	off := r.attrOffsets[idx]
-	if off == 0 {
-		return -1
-	}
-	return int(off - 1) // 1-based to 0-based
-}
-
-// stringAttr reads a length-prefixed string attribute by name.
-func (r *record) stringAttr(name string) string {
-	pos := r.attrOffset(name)
-	if pos < 0 || pos+4 > len(r.buf) {
-		return ""
-	}
-	length := int(binary.BigEndian.Uint32(r.buf[pos : pos+4]))
-	start := pos + 4
-	if start+length > len(r.buf) {
-		return ""
-	}
-	return string(bytes.TrimRight(r.buf[start:start+length], "\x00"))
-}
-
-// uint32Attr reads a uint32 attribute by name.
-func (r *record) uint32Attr(name string) uint32 {
-	pos := r.attrOffset(name)
-	if pos < 0 || pos+4 > len(r.buf) {
-		return 0
-	}
-	return binary.BigEndian.Uint32(r.buf[pos : pos+4])
-}
-
-// timeAttr reads a 16-byte TimeDate attribute by name.
-func (r *record) timeAttr(name string) time.Time {
-	pos := r.attrOffset(name)
-	if pos < 0 || pos+16 > len(r.buf) {
-		return time.Time{}
-	}
-	raw := bytes.TrimRight(r.buf[pos:pos+16], "\x00")
-	if len(raw) == 0 {
-		return time.Time{}
-	}
-	parsed, err := time.Parse("20060102150405Z", string(raw))
-	if err != nil {
-		return time.Time{}
-	}
-	return parsed
-}
-
-// blobAttr reads a length-prefixed binary blob attribute by name.
-func (r *record) blobAttr(name string) []byte {
-	pos := r.attrOffset(name)
-	if pos < 0 || pos+4 > len(r.buf) {
-		return nil
-	}
-	length := int(binary.BigEndian.Uint32(r.buf[pos : pos+4]))
-	start := pos + 4
-	if length == 0 || start+length > len(r.buf) {
-		return nil
-	}
-	return append([]byte{}, r.buf[start:start+length]...)
-}
-
-// fourCharAttr reads a 4-byte FourCC attribute by name.
-func (r *record) fourCharAttr(name string) string {
-	pos := r.attrOffset(name)
-	if pos < 0 || pos+4 > len(r.buf) {
-		return ""
-	}
-	return strings.TrimRight(string(r.buf[pos:pos+4]), "\x00")
 }

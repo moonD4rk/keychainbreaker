@@ -11,16 +11,16 @@ import (
 )
 
 const (
-	blockSize  = 8
-	keyLength  = 24
-	pbkdf2Iter = 1000
+	blockSize        = des.BlockSize
+	tripleDESKeyLen  = 24
+	pbkdf2Iterations = 1000
 )
 
-// magicCMSIV is the fixed IV used by Apple's CMS key wrapping (RFC 3217).
-var magicCMSIV = []byte{0x4a, 0xdd, 0xa2, 0x2c, 0x79, 0xe8, 0x21, 0x05}
+// cmsWrapIV is the fixed IV of Apple's CMS key wrapping (RFC 3217).
+var cmsWrapIV = []byte{0x4a, 0xdd, 0xa2, 0x2c, 0x79, 0xe8, 0x21, 0x05}
 
-// kcDecrypt decrypts ciphertext using 3DES-CBC and validates PKCS#7 padding.
-func kcDecrypt(key, iv, data []byte) ([]byte, error) {
+// decryptCBC decrypts 3DES-CBC ciphertext and strips its PKCS#7 padding.
+func decryptCBC(key, iv, data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, errors.New("ciphertext is empty")
 	}
@@ -49,12 +49,10 @@ func kcDecrypt(key, iv, data []byte) ([]byte, error) {
 	return plain[:len(plain)-pad], nil
 }
 
-// keyblobDecrypt performs RFC 3217 two-stage key unwrapping for symmetric keys.
-// Stage 1: decrypt with dbKey + magicCMSIV
-// Stage 2: reverse first 32 bytes
-// Stage 3: decrypt with dbKey + record IV
-func keyblobDecrypt(encryptedBlob, iv, dbKey []byte) ([]byte, error) {
-	plain, err := kcDecrypt(dbKey, magicCMSIV, encryptedBlob)
+// unwrapKey unwraps a 24-byte symmetric key (RFC 3217): decrypt with the CMS IV, reverse the first 32 bytes,
+// decrypt again with the record's IV.
+func unwrapKey(encryptedBlob, iv, dbKey []byte) ([]byte, error) {
+	plain, err := decryptCBC(dbKey, cmsWrapIV, encryptedBlob)
 	if err != nil {
 		return nil, fmt.Errorf("key unwrap stage 1: %w", err)
 	}
@@ -65,7 +63,7 @@ func keyblobDecrypt(encryptedBlob, iv, dbKey []byte) ([]byte, error) {
 	for i := 0; i < 32; i++ {
 		rev[i] = plain[31-i]
 	}
-	finalPlain, err := kcDecrypt(dbKey, iv, rev)
+	finalPlain, err := decryptCBC(dbKey, iv, rev)
 	if err != nil {
 		return nil, fmt.Errorf("key unwrap stage 2: %w", err)
 	}
@@ -73,17 +71,15 @@ func keyblobDecrypt(encryptedBlob, iv, dbKey []byte) ([]byte, error) {
 		return nil, errors.New("unwrapped key too short")
 	}
 	key := finalPlain[4:]
-	if len(key) != keyLength {
-		return nil, fmt.Errorf("invalid unwrapped key length: got %d, want %d", len(key), keyLength)
+	if len(key) != tripleDESKeyLen {
+		return nil, fmt.Errorf("invalid unwrapped key length: got %d, want %d", len(key), tripleDESKeyLen)
 	}
 	return append([]byte{}, key...), nil
 }
 
-// privateKeyDecrypt performs RFC 3217 two-stage key unwrapping for private keys.
-// Unlike keyblobDecrypt, this reverses ALL bytes (not just first 32),
-// because private keys are larger than 24-byte symmetric keys.
-func privateKeyDecrypt(encryptedBlob, iv, dbKey []byte) ([]byte, error) {
-	plain, err := kcDecrypt(dbKey, magicCMSIV, encryptedBlob)
+// unwrapPrivateKey unwraps a private key like unwrapKey, except that it reverses every byte, not just the first 32.
+func unwrapPrivateKey(encryptedBlob, iv, dbKey []byte) ([]byte, error) {
+	plain, err := decryptCBC(dbKey, cmsWrapIV, encryptedBlob)
 	if err != nil {
 		return nil, fmt.Errorf("private key unwrap stage 1: %w", err)
 	}
@@ -91,21 +87,20 @@ func privateKeyDecrypt(encryptedBlob, iv, dbKey []byte) ([]byte, error) {
 	for i := range plain {
 		rev[i] = plain[len(plain)-1-i]
 	}
-	finalPlain, err := kcDecrypt(dbKey, iv, rev)
+	finalPlain, err := decryptCBC(dbKey, iv, rev)
 	if err != nil {
 		return nil, fmt.Errorf("private key unwrap stage 2: %w", err)
 	}
 	return finalPlain, nil
 }
 
-// generateMasterKey derives a 24-byte master key from a password using
-// PBKDF2-HMAC-SHA1 with the salt from the keychain's DBBlob.
-func generateMasterKey(password string, salt []byte) []byte {
-	return pbkdf2Key([]byte(password), salt, pbkdf2Iter, keyLength, sha1.New)
+// deriveMasterKey derives the 24-byte master key from the password with PBKDF2-HMAC-SHA1 and the database blob's
+// salt.
+func deriveMasterKey(password string, salt []byte) []byte {
+	return pbkdf2Key([]byte(password), salt, pbkdf2Iterations, tripleDESKeyLen, sha1.New)
 }
 
-// pbkdf2Key derives a key from password, salt and iteration count.
-// Copied from golang.org/x/crypto/pbkdf2 to avoid external dependency.
+// pbkdf2Key is golang.org/x/crypto/pbkdf2.Key: crypto/pbkdf2 needs Go 1.24, and the library has no dependencies.
 func pbkdf2Key(password, salt []byte, iter, keyLen int, h func() hash.Hash) []byte {
 	prf := hmac.New(h, password)
 	hashLen := prf.Size()

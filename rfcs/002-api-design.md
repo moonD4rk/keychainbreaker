@@ -3,310 +3,202 @@
 Status: Implemented
 Author: @moonD4rk
 Date: 2026-03-27
+Updated: 2026-11-26
 
 ## Summary
 
-This document defines the public API and internal architecture of the keychainbreaker
-Go library. The library parses macOS Keychain files and decrypts stored credentials
-using the encryption scheme described in RFC 001.
+The public API and internal architecture of the keychainbreaker Go library, which parses macOS Keychain files and decrypts their credentials with the scheme described in RFC 001.
 
 Design principles:
-- **Open/Unlock separation**: parse file structure without requiring credentials upfront
-- **Functional options**: extensible unlock methods without breaking API
-- **Dynamic schema**: parse record attributes from the file's self-describing schema
-- **Single package**: all code in the root `keychainbreaker` package
-- **Zero dependencies**: standard library only, Go 1.20 compatible
+
+- **Open and unlock are separate.** Parsing needs no credential; metadata, certificates and the password hash are available before any unlock.
+- **Explicit calls over options.** Each input has its own function (`Open`, `OpenBytes`, `UnlockWithPassword`, `UnlockWithKey`); options are left for settings that combine, such as a logger.
+- **Raw data out.** Records carry bytes and plain values; encoding them (text, hex, base64, JSON) is the caller's business.
+- **Self-describing records.** Attributes are read by name and decoded by the format the file's own schema declares.
+- **One package, standard library only, Go 1.20.** HackBrowserData and other consumers build it with Go 1.20.
 
 ## 1. Public API
 
 ### Open
 
 ```go
-// Open parses a keychain and returns a locked Keychain.
-func Open(opts ...OpenOption) (*Keychain, error)
+// Open reads and parses the keychain file at path.
+func Open(path string, opts ...Option) (*Keychain, error)
 
-// OpenOption configures how to open a keychain.
-type OpenOption func(*openConfig)
+// OpenBytes parses a keychain held in memory. It keeps a copy of buf.
+func OpenBytes(buf []byte, opts ...Option) (*Keychain, error)
 
-func WithFile(path string) OpenOption  // specific file path
-func WithBytes(buf []byte) OpenOption  // in-memory buffer
+// DefaultKeychainPath returns ~/Library/Keychains/login.keychain-db.
+func DefaultKeychainPath() (string, error)
+
+type Option func(*options)
+
+// WithLogger sends diagnostics to l; *slog.Logger satisfies Logger.
+func WithLogger(l Logger) Option
 ```
 
-With no options, `Open()` reads the default macOS login keychain
-(`~/Library/Keychains/login.keychain-db`).
-
-After `Open`, the following are available without unlocking:
-- `PasswordHash()` for offline cracking hash export
+There is no implicit default: an empty path or buffer is an error, never a silent read of the user's login keychain.
 
 ### Unlock
 
 ```go
-// Unlock decrypts the keychain using the provided credential.
-// If Unlock fails, extraction methods return ErrLocked.
-func (kc *Keychain) Unlock(opt UnlockOption) error
+// UnlockWithPassword derives the master key with PBKDF2-HMAC-SHA1 (blob version 0x100 only).
+func (kc *Keychain) UnlockWithPassword(password string) error
 
-// TryUnlock attempts to decrypt, but does not block extraction on failure.
-// When the credential is wrong or missing, extraction methods still return
-// record metadata with encrypted fields (passwords, private key data) set to nil.
-func (kc *Keychain) TryUnlock(opts ...UnlockOption) error
+// UnlockWithKey takes the 24-byte master key; it works for every blob version.
+func (kc *Keychain) UnlockWithKey(key []byte) error
 
-// Unlocked reports whether the keychain has been successfully decrypted.
+// Unlocked reports whether an unlock has succeeded.
 func (kc *Keychain) Unlocked() bool
-
-// UnlockOption configures how to unlock the keychain.
-type UnlockOption func(*unlockConfig)
-
-// WithKey unlocks using a raw hex-encoded 24-byte master key.
-func WithKey(hexKey string) UnlockOption
-
-// WithPassword unlocks using the user's keychain password (PBKDF2 derivation).
-func WithPassword(password string) UnlockOption
 ```
 
-`Unlock` derives the master key, decrypts the database key, and unwraps all
-per-record symmetric keys. After a successful `Unlock`, record extraction
-methods become available.
+A wrong credential returns `ErrWrongKey`; a password on a version 0x200 keychain returns `ErrUnsupportedBlobVersion`. A failed attempt changes nothing, so the caller can try another credential, and a failed attempt after a successful one keeps the keychain unlocked. A key of the wrong length is a caller error, not `ErrWrongKey`.
 
-`TryUnlock` performs the same decryption attempt but sets the keychain to
-partial mode regardless of success or failure. This allows extraction of
-unencrypted record attributes (service, account, timestamps, certificates)
-even when the password is wrong or unavailable.
-
-### Record Extraction
+### Records
 
 ```go
-// GenericPasswords returns all decrypted generic password records.
 func (kc *Keychain) GenericPasswords() ([]GenericPassword, error)
-
-// InternetPasswords returns all decrypted internet password records.
 func (kc *Keychain) InternetPasswords() ([]InternetPassword, error)
-```
+func (kc *Keychain) PrivateKeys() ([]PrivateKey, error)
+func (kc *Keychain) Certificates() ([]Certificate, error)
 
-Extraction methods return `ErrLocked` if called before `Unlock`.
-When `TryUnlock` is used instead, extraction methods return record metadata
-with encrypted fields set to nil (no `ErrLocked`).
-
-### Utility
-
-```go
-// PasswordHash exports the keychain password hash for offline cracking.
-// Format: $keychain$*<salt_hex>*<iv_hex>*<ciphertext_hex>
-// Compatible with hashcat mode 23100 and John the Ripper.
-// Does not require Unlock.
+// PasswordHash returns $keychain$*<salt>*<iv>*<ciphertext> for hashcat (mode 23100) and John the Ripper.
 func (kc *Keychain) PasswordHash() (string, error)
 ```
 
-## 2. Exported Types
+Extraction never depends on the lock state. Every record carries its metadata; `Password` and `PrivateKey.Data` are nil while the keychain is locked and for a record that cannot be decrypted, which is logged rather than returned as an error. An empty password is an empty, non-nil slice, so nil always means "not available". Certificates are not encrypted and are always complete.
+
+A `Keychain` is safe for concurrent use: schemas are immutable once parsed, and the keys an unlock recovers are swapped in under a lock.
+
+### Logger
 
 ```go
-type GenericPassword struct {
-    Service     string
-    Account     string
-    Password    []byte    // raw decrypted bytes; caller decides encoding
-    Description string
-    Comment     string
-    Creator     string
-    Type        string
-    PrintName   string
-    Alias       string
-    Created     time.Time
-    Modified    time.Time
-}
-
-type InternetPassword struct {
-    Server         string
-    Account        string
-    Password       []byte    // raw decrypted bytes; caller decides encoding
-    SecurityDomain string
-    Protocol       string
-    AuthType       string
-    Port           uint32
-    Path           string
-    Description    string
-    Comment     string
-    Creator     string
-    Type        string
-    PrintName   string
-    Alias       string
-    Created     time.Time
-    Modified    time.Time
-}
-
-type PrivateKey struct {
-    Name      string // first 12 bytes of decrypted data
-    Data      []byte // raw private key material (PKCS#8)
-    PrintName string
-    Label     string
-    KeyClass  uint32
-    KeyType   uint32
-    KeySize   uint32
-}
-
-type Certificate struct {
-    Data      []byte // raw DER-encoded certificate
-    Type      uint32
-    Encoding  uint32
-    PrintName string
-    Subject   []byte
-    Issuer    []byte
-    Serial    []byte
+type Logger interface {
+    Debug(msg string, args ...any)
+    Warn(msg string, args ...any)
 }
 ```
 
-`Password` is `[]byte` instead of `string` because keychain entries may contain
-non-UTF-8 binary data. The caller decides how to interpret or encode the result.
+The arguments alternate keys and values, as in `log/slog`, so a `*slog.Logger` can be passed directly; the library cannot import `log/slog` itself on Go 1.20. Debug carries routine progress; Warn reports records that were skipped or not decrypted. Errors are returned, never logged.
+
+## 2. Types
+
+```go
+type GenericPassword struct {
+    Service, Account string
+    Password         []byte // nil while locked or not decryptable
+    Description, Comment string
+    Creator, Type    string // four-character codes
+    PrintName, Alias string
+    Created, Modified time.Time
+}
+
+type InternetPassword struct {
+    Server, Account  string
+    Password         []byte
+    SecurityDomain   string
+    Protocol         string // four-character code: "htps", "smb ", ...
+    AuthType         string // four-character code: "dflt", ...
+    Port             uint32
+    Path             string
+    Description, Comment string
+    Creator, Type    string
+    PrintName, Alias string
+    Created, Modified time.Time
+}
+
+type PrivateKey struct {
+    Data      []byte // PKCS#8; nil while locked or not decryptable
+    PrintName string
+    Label     []byte // usually the SHA-1 hash of the public key
+    KeyClass, KeyType, KeySize uint32
+}
+
+type Certificate struct {
+    Data            []byte // DER
+    Type, Encoding  uint32
+    PrintName       string
+    Subject, Issuer []byte // DER-encoded names
+    Serial          []byte
+}
+```
+
+The types have no JSON tags and no pre-encoded copies of their bytes. The CLI defines its own output types (RFC 003).
 
 ## 3. Errors
 
 ```go
-// Errors returned by Open.
 var (
-    ErrInvalidSignature = errors.New("keychainbreaker: invalid keychain signature")
-    ErrParseFailed      = errors.New("keychainbreaker: parse failed")
-)
-
-// Errors returned by Unlock.
-var (
-    ErrWrongKey = errors.New("keychainbreaker: wrong key or password")
-)
-
-// Errors returned by record extraction methods.
-var (
-    ErrLocked = errors.New("keychainbreaker: keychain is locked")
+    ErrInvalidSignature       // Open, OpenBytes: not a keychain
+    ErrParseFailed            // malformed structure
+    ErrWrongKey               // UnlockWithPassword, UnlockWithKey: the credential does not decrypt the keychain
+    ErrUnsupportedBlobVersion // UnlockWithPassword, PasswordHash: blob version other than 0x100
 )
 ```
 
-## 4. Export Boundary
+Every error wraps one of these where it applies, so callers use `errors.Is`. There is no "locked" error: a locked keychain returns metadata instead.
 
-Only the minimal API surface is exported. All binary structures, parsing logic,
-and cryptographic internals are unexported.
+## 4. Internal Architecture
 
-### Exported (uppercase)
+| File          | Holds                                                                                     |
+| ------------- | ----------------------------------------------------------------------------------------- |
+| `keychain.go` | `Keychain`, `Open`, `OpenBytes`, `DefaultKeychainPath`, parsing order, `PasswordHash`     |
+| `records.go`  | the four extraction methods and per-record decryption                                     |
+| `unlock.go`   | `UnlockWithPassword`, `UnlockWithKey`, database key and record key recovery               |
+| `decrypt.go`  | 3DES-CBC, RFC 3217 key unwrapping, PBKDF2                                                 |
+| `parse.go`    | binary structures, all read through one bounds-checked `span` helper                      |
+| `schema.go`   | schema discovery and attribute decoding by format                                         |
+| `types.go`, `errors.go`, `logger.go` | the exported types, errors and logger interface                    |
 
-```
-Functions:    Open
-Types:        Keychain, OpenOption, UnlockOption, GenericPassword, InternetPassword,
-              PrivateKey, Certificate
-Methods:      Keychain.Unlock, Keychain.TryUnlock, Keychain.Unlocked,
-              Keychain.GenericPasswords, Keychain.InternetPasswords,
-              Keychain.PrivateKeys, Keychain.Certificates, Keychain.PasswordHash
-Options:      WithFile, WithBytes, WithKey, WithPassword
-Errors:       ErrInvalidSignature, ErrParseFailed, ErrLocked, ErrWrongKey
-```
+### Parsing
 
-### Unexported
+`Open` and `OpenBytes`:
 
-All binary structures, parsing logic, cryptographic internals, and option configs
-are unexported. The `Keychain` struct is exported but all its fields are unexported.
+1. Parse the 20-byte file header and check the `kych` signature.
+2. Read the table directory at the header's offset and validate the table count against the file size before allocating anything.
+3. Parse every table header and its record offsets.
+4. Read the SchemaAttributes table (0x00000002) with its bootstrap schema: `RelationID`, `AttributeID`, `AttributeNameFormat`, `AttributeName`, `AttributeNameID`, `AttributeFormat`. Every other table's schema, attribute names and formats, comes from these records.
+5. Locate the database blob in the Metadata table.
 
-## 5. Internal Architecture
+Attributes are read by name through the table's schema and decoded by the declared format (CSSM_DB_ATTRIBUTE_FORMAT): blobs and strings are length-prefixed, integers are four bytes, dates are 16-byte `YYYYMMDDhhmmssZ` strings. A four-character code stored as an integer, such as `crtr` or `ptcl`, reads as text; one stored as a blob, such as `atyp`, reads the same way.
 
-Single package, split by responsibility: `keychainbreaker.go` (Open, record extraction),
-`unlock.go` (Unlock, key derivation), `decrypt.go` (3DES-CBC, PBKDF2, key unwrap),
-`schema.go` (dynamic schema discovery), `parse.go` (binary parsing), `types.go`
-(exported types), `errors.go` (sentinel errors).
+### Decryption
 
-### Dynamic Schema
+Unlocking:
 
-On `Open`, the parser:
+1. Take the master key, or derive it with `PBKDF2(password, salt, 1000, 24, SHA-1)`.
+2. Decrypt the database key from the database blob with 3DES-CBC.
+3. Unwrap each SymmetricKey record (RFC 3217) and index the keys by the SSGP label they serve.
+4. Store the database key and the record keys only if all of this succeeds.
 
-1. Parses `ApplDBHeader` and `ApplDBSchema` (hardcoded, always the same)
-2. Bootstraps `SchemaInfo` (0x00000000) and `SchemaAttributes` (0x00000002)
-   using hardcoded schemas (required to discover all other schemas)
-3. Reads `SchemaAttributes` records to build attribute definitions for each table
-4. Parses all tables using their discovered schemas
-5. Extracts `DBBlob` from the Metadata table
+Reading a password record: parse its blob as SSGP, look up the record key by label, and decrypt with 3DES-CBC. A private key is unwrapped with the database key; the PKCS#8 data follows a 12-byte prefix.
 
-Record extraction (e.g. `GenericPasswords()`) uses the dynamic schema to read
-attribute values by name rather than by hardcoded struct offsets.
+## 5. Testing
 
-### Decryption Flow
+### Fixture
 
-On `Unlock`:
+`testdata/test.keychain-db` is a keychain created with the macOS `security` command. It contains no personal information.
 
-1. Derive master key from the provided credential (hex key / password / SystemKey)
-2. Decrypt database key: `kcDecrypt(masterKey, DBBlob.IV, EncryptedDBKey)`
-3. For each SymmetricKey record: RFC 3217 two-stage unwrap -> build `keyList`
+- Password: `keychainbreaker-test`
+- Master key: `4557eb716bbf20200945109cf3b884af9aca72e890e47c07`, PBKDF2 of the password
 
-On `GenericPasswords()` / `InternetPasswords()`:
+| Type             | Service or server | Account | Secret        | Notes                                                       |
+| ---------------- | ----------------- | ------- | ------------- | ----------------------------------------------------------- |
+| GenericPassword  | moond4rk.com      | admin   | password#123  | description, comment, creator `mD4k`, type `note`           |
+| GenericPassword  | HackBrowserData   | admin   | password#123  | minimal                                                     |
+| InternetPassword | moond4rk.com:443  | admin   | password#123  | protocol `htps`, auth type `dflt`, path `/login`, all fields |
+| InternetPassword | moond4rk.com:445  | admin   | password#123  | protocol `smb `, minimal                                    |
+| PrivateKey       | 93B7C5C0          | -       | RSA 2048-bit  | 20-byte label                                               |
+| X509Certificate  | keychainbreaker-test | -    | self-signed   | -                                                           |
 
-1. Iterate records in the target table
-2. Parse blob area as SSGP
-3. Look up per-record key from `keyList`
-4. `kcDecrypt(recordKey, SSGP.IV, SSGP.EncryptedPassword)` -> raw plaintext
+### Coverage
 
-## 6. Implementation Status
+- **End to end:** every record type against the fixture, field by field, unlocked by password and by key; metadata from a locked keychain.
+- **Unlock semantics:** wrong credentials, retry after a failure, a failure after a success, key length, version 0x200 gating.
+- **Parsing:** the bounds helper, each binary structure, truncated and oversized inputs, including a table count that once triggered a 64 MiB allocation.
+- **Schema:** the discovered formats, and attribute decoding by format.
+- **Concurrency:** parallel opening, unlocking and extraction under `-race`.
+- **Fuzzing:** `FuzzOpenBytes` mutates the fixture through parsing, unlocking and extraction.
+- **Examples:** runnable examples for pkg.go.dev, checked against the fixture.
 
-| Feature | Status |
-|---------|--------|
-| `Open` with functional options | Done |
-| `WithPassword` (PBKDF2) | Done |
-| `WithKey` (hex master key) | Done |
-| `GenericPasswords` | Done |
-| `InternetPasswords` | Done |
-| `PasswordHash` | Done |
-| Dynamic schema | Done |
-| `WithSystemKey` | Future |
-| `PrivateKeys` | Done |
-| `Certificates` | Done |
-| `TryUnlock` (partial extraction) | Done |
-| `Unlocked()` | Done |
-
-## 7. Testing
-
-### Test Fixture
-
-`testdata/test.keychain-db` is a self-contained keychain created with the macOS
-`security` command. It contains no personal information and is safe for public repos.
-
-- **Keychain password**: `keychainbreaker-test`
-- **Master key (hex)**: derived from password via `PBKDF2(password, Salt, 1000, 24, SHA1)`
-
-Records in the test keychain:
-
-| Type | Service/Server | Account | Password | Extra Fields |
-|------|---------------|---------|----------|--------------|
-| GenericPassword | moond4rk.com | admin | password#123 | Desc, Comment, Creator(mD4k), Type(note) |
-| GenericPassword | HackBrowserData | admin | password#123 | (minimal) |
-| InternetPassword | moond4rk.com:443 | admin | password#123 | Protocol(htps), Path(/login), Domain, all fields |
-| InternetPassword | moond4rk.com:445 | admin | password#123 | Protocol(smb), minimal |
-| PrivateKey | keychainbreaker-test | - | RSA 2048-bit | - |
-| X509Certificate | keychainbreaker-test | - | self-signed | - |
-
-### Test Categories
-
-**End-to-end** (highest priority):
-
-```go
-func TestGenericPasswords(t *testing.T)      // Open -> Unlock -> GenericPasswords -> verify all fields
-func TestInternetPasswords(t *testing.T)     // Open -> Unlock -> InternetPasswords -> verify all fields
-func TestPrivateKeys(t *testing.T)           // Open -> Unlock -> PrivateKeys -> verify
-```
-
-**Schema validation**:
-
-```go
-func TestDynamicSchema(t *testing.T)         // verify discovered attributes match known schema
-```
-
-**Unit tests**:
-
-```go
-func TestKcDecrypt(t *testing.T)             // 3DES-CBC with known key/iv/ciphertext
-func TestKeyblobDecrypt(t *testing.T)        // RFC 3217 two-stage unwrap
-func TestParseHeader(t *testing.T)           // 20-byte header parsing
-func TestParseDBBlob(t *testing.T)           // 92-byte DBBlob parsing
-func TestParseSSGP(t *testing.T)             // SSGP structure parsing
-```
-
-**Error paths**:
-
-```go
-func TestOpenInvalidFile(t *testing.T)       // non-keychain file -> ErrInvalidSignature
-func TestUnlockWrongKey(t *testing.T)        // bad key -> ErrWrongKey
-func TestExtractBeforeUnlock(t *testing.T)   // locked keychain -> ErrLocked
-func TestTryUnlock(t *testing.T)             // table-driven: 5 scenarios (correct/wrong password/key, no credential)
-func TestUnlockedInitialState(t *testing.T)  // Unlocked() == false after Open
-func TestTryUnlockThenUnlock(t *testing.T)   // TryUnlock failure then Unlock success recovers
-func TestOpenTruncatedFile(t *testing.T)     // corrupted/short file -> error
-```
+CI runs the tests on Go 1.20 and on the latest Go, on Linux, macOS and Windows.

@@ -1,154 +1,157 @@
 package keychainbreaker
 
 import (
-	"os"
+	"encoding/binary"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func readTestKeychain(t *testing.T) []byte {
-	t.Helper()
-	buf, err := os.ReadFile(testKeychainPath)
-	require.NoError(t, err)
-	return buf
+func TestSpan(t *testing.T) {
+	buf := []byte("0123456789")
+	tests := []struct {
+		name   string
+		off, n int
+		want   string
+		ok     bool
+	}{
+		{name: "inside", off: 2, n: 3, want: "234", ok: true},
+		{name: "to the end", off: 7, n: 3, want: "789", ok: true},
+		{name: "empty at the end", off: 10, n: 0, want: "", ok: true},
+		{name: "past the end", off: 8, n: 3},
+		{name: "negative offset", off: -1, n: 2},
+		{name: "negative length", off: 2, n: -1},
+		{name: "length overflow", off: 2, n: math.MaxInt},
+		{name: "offset overflow", off: math.MaxInt, n: 1},
+	}
+	for _, tt := range tests {
+		got, ok := span(buf, tt.off, tt.n)
+		assert.Equal(t, tt.ok, ok, tt.name)
+		assert.Equal(t, tt.want, string(got), tt.name)
+	}
 }
 
-func TestParseHeader(t *testing.T) {
-	buf := readTestKeychain(t)
-	hdr, err := parseHeader(buf)
+func TestParseFileHeader(t *testing.T) {
+	header, err := parseFileHeader(readTestKeychain(t))
 	require.NoError(t, err)
+	assert.Equal(t, keychainSignature, string(header.signature[:]))
+	assert.Equal(t, uint32(0x00010000), header.version)
+	assert.Equal(t, uint32(fileHeaderLen), header.tableDirectoryOffset)
 
-	assert.Equal(t, "kych", string(hdr.signature[:]))
-	assert.Equal(t, uint32(0x00010000), hdr.version)
-	assert.Equal(t, uint32(16), hdr.headerSize)
-	assert.Equal(t, uint32(20), hdr.schemaOff)
-}
-
-func TestParseHeaderTooSmall(t *testing.T) {
-	_, err := parseHeader([]byte{1, 2, 3})
+	_, err = parseFileHeader([]byte{1, 2, 3})
 	assert.Error(t, err)
 }
 
-func TestParseSchema(t *testing.T) {
+func TestParseTableDirectory(t *testing.T) {
 	buf := readTestKeychain(t)
-	hdr, err := parseHeader(buf)
+	offsets, err := parseTableDirectory(buf, fileHeaderLen)
 	require.NoError(t, err)
-
-	schema, offsets, err := parseSchema(buf, hdr.schemaOff)
-	require.NoError(t, err)
-
-	assert.Equal(t, uint32(12), schema.tableCount)
 	assert.Len(t, offsets, 12)
+	for _, off := range offsets {
+		table, parseErr := parseTable(buf, off)
+		require.NoError(t, parseErr)
+		assert.Equal(t, off, table.offset)
+	}
+
+	binary.BigEndian.PutUint32(buf[fileHeaderLen+uint32Len:], math.MaxUint32)
+	_, err = parseTableDirectory(buf, fileHeaderLen)
+	require.Error(t, err)
+
+	_, err = parseTableDirectory(buf, math.MaxUint32)
+	assert.Error(t, err)
 }
 
-func TestParseTable(t *testing.T) {
-	buf := readTestKeychain(t)
-	hdr, err := parseHeader(buf)
-	require.NoError(t, err)
+func TestParseTableCapsRecordCount(t *testing.T) {
+	buf := make([]byte, tableHeaderLen+2*uint32Len)
+	binary.BigEndian.PutUint32(buf[4:], tableGenericPassword)
+	binary.BigEndian.PutUint32(buf[8:], math.MaxUint32)
+	binary.BigEndian.PutUint32(buf[tableHeaderLen:], 8)
+	binary.BigEndian.PutUint32(buf[tableHeaderLen+uint32Len:], 3) // not 4-byte aligned, ignored
 
-	_, offsets, err := parseSchema(buf, hdr.schemaOff)
+	table, err := parseTable(buf, 0)
 	require.NoError(t, err)
+	assert.Equal(t, tableGenericPassword, table.id)
+	assert.Equal(t, []uint32{8}, table.recordOffsets)
 
-	// Parse the first non-zero table.
-	var table tableInfo
-	var found bool
-	for _, off := range offsets {
-		if off == 0 {
-			continue
-		}
-		table, err = parseTable(buf, headerSize+int(off))
-		if err == nil {
-			found = true
-			break
-		}
-	}
-	require.True(t, found, "no valid table found")
-	assert.Positive(t, table.baseOffset)
+	_, err = parseTable(buf, len(buf))
+	assert.Error(t, err)
 }
 
 func TestParseDBBlob(t *testing.T) {
 	kc := openTestKeychain(t)
-
-	blobBuf := kc.buf[kc.blobBaseAddr : kc.blobBaseAddr+dbBlobSize]
-	blob, err := parseDBBlob(blobBuf)
+	blob, err := parseDBBlob(kc.buf, kc.dbBlobOffset)
 	require.NoError(t, err)
-
-	assert.Equal(t, uint32(0xFADE0711), blob.magic)
-	assert.Equal(t, blobVersionV1, blob.blobVersion)
+	assert.Equal(t, uint32(keyBlobMagic), blob.magic)
+	assert.Equal(t, blobVersionV1, blob.version)
+	assert.Equal(t, uint32(120), blob.cryptoStart)
+	assert.Equal(t, uint32(168), blob.totalLength)
 	assert.Len(t, blob.salt, 20)
 	assert.Len(t, blob.iv, 8)
-	assert.Equal(t, uint32(120), blob.startCryptoBlob)
-	assert.Equal(t, uint32(168), blob.totalLength)
-}
 
-func TestParseDBBlobTooSmall(t *testing.T) {
-	_, err := parseDBBlob(make([]byte, 10))
+	_, err = parseDBBlob(kc.buf, len(kc.buf)-dbBlobLen+1)
 	assert.Error(t, err)
 }
 
 func TestParseSSGP(t *testing.T) {
-	// Build a valid SSGP: magic(4) + label(16) + iv(8) + encrypted data.
-	var buf []byte
-	buf = append(buf, "ssgp"...)             // magic
-	buf = append(buf, "0123456789abcdef"...) // label (16 bytes)
-	buf = append(buf, "iviviviv"...)         // iv (8 bytes)
-	buf = append(buf, "encrypted"...)        // encrypted password
-
+	buf := []byte("ssgp0123456789abcdefiviviviv" + "encrypted")
 	block, err := parseSSGP(buf)
 	require.NoError(t, err)
-
-	assert.Equal(t, []byte("ssgp"), block.magic)
-	assert.Equal(t, []byte("0123456789abcdef"), block.label)
+	assert.Equal(t, []byte("ssgp0123456789abcdef"), block.label)
 	assert.Equal(t, []byte("iviviviv"), block.iv)
-	assert.Equal(t, []byte("encrypted"), block.encryptedPassword)
-}
+	assert.Equal(t, []byte("encrypted"), block.ciphertext)
 
-func TestParseSSGPTooSmall(t *testing.T) {
-	_, err := parseSSGP(make([]byte, 10))
+	_, err = parseSSGP(buf[:ssgpHeaderLen-1])
+	require.Error(t, err)
+	_, err = parseSSGP([]byte("nope0123456789abcdefiviviviv"))
 	assert.Error(t, err)
 }
 
-func TestParseKeyBlob(t *testing.T) {
-	// Build a minimal valid key blob: magic(4) + unk(4) + startCrypto(4) + totalLen(4) + iv(8) = 24.
-	buf := make([]byte, keyBlobLen)
-	buf[0] = 0xFA
-	buf[1] = 0xDE
-	buf[2] = 0x07
-	buf[3] = 0x11
-	// startCryptoBlob at offset 8
-	buf[11] = 0x10
-	// totalLength at offset 12
-	buf[15] = 0x20
+func TestParseKeyBlobHeader(t *testing.T) {
+	buf := make([]byte, keyBlobHeaderLen+8)
+	binary.BigEndian.PutUint32(buf[0:], keyBlobMagic)
+	binary.BigEndian.PutUint32(buf[8:], keyBlobHeaderLen)
+	binary.BigEndian.PutUint32(buf[12:], keyBlobHeaderLen+8)
+	copy(buf[16:], "iviviviv")
+	copy(buf[keyBlobHeaderLen:], "wrapped!")
 
-	blob, err := parseKeyBlob(buf)
+	header, err := parseKeyBlobHeader(buf)
 	require.NoError(t, err)
+	assert.Equal(t, []byte("iviviviv"), header.iv)
+	wrapped, err := header.ciphertext(buf)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("wrapped!"), wrapped)
 
-	assert.Equal(t, uint32(keyBlobMagic), blob.magic)
-	assert.Equal(t, uint32(0x10), blob.startCryptoBlob)
-	assert.Equal(t, uint32(0x20), blob.totalLength)
-	assert.Len(t, blob.iv, 8)
-}
+	header.totalLength = uint32(len(buf) + 1)
+	_, err = header.ciphertext(buf)
+	require.Error(t, err)
+	header.totalLength = header.cryptoStart
+	_, err = header.ciphertext(buf)
+	require.Error(t, err)
 
-func TestParseKeyBlobTooSmall(t *testing.T) {
-	_, err := parseKeyBlob(make([]byte, 10))
+	_, err = parseKeyBlobHeader(buf[:keyBlobHeaderLen-1])
+	require.Error(t, err)
+	buf[0] = 0
+	_, err = parseKeyBlobHeader(buf)
 	assert.Error(t, err)
 }
 
-func TestRecordAttrOffset(t *testing.T) {
-	schema := &tableSchema{
-		attrs: []attrDef{
-			{name: "first"},
-			{name: "second"},
-		},
-	}
-	rec := &record{
-		attrOffsets: []uint32{0, 42},
-		schema:      schema,
-	}
+func TestParseRecordRejectsBadSizes(t *testing.T) {
+	schema := newTableSchema([]attrDef{{name: "a", format: formatUInt32}})
+	buf := make([]byte, 64)
 
-	assert.Equal(t, -1, rec.attrOffset("first"))   // offset 0 means empty
-	assert.Equal(t, 41, rec.attrOffset("second"))  // 42-1 = 41 (1-based to 0-based)
-	assert.Equal(t, -1, rec.attrOffset("missing")) // not in schema
+	_, err := parseRecord(buf, 0, schema)
+	require.Error(t, err, "zero size")
+
+	binary.BigEndian.PutUint32(buf, 65)
+	_, err = parseRecord(buf, 0, schema)
+	require.Error(t, err, "size past the end")
+
+	binary.BigEndian.PutUint32(buf, 8)
+	_, err = parseRecord(buf, 0, schema)
+	require.Error(t, err, "size smaller than the header")
+
+	_, err = parseRecord(buf, len(buf), schema)
+	assert.Error(t, err, "offset past the end")
 }
