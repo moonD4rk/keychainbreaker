@@ -26,7 +26,7 @@
 // # Unlocking
 //
 //   - [Keychain.UnlockWithPassword] derives the master key from the password with PBKDF2-HMAC-SHA1.
-//   - [Keychain.UnlockWithEntropy] also folds in a per-machine entropy file: macOS 26.4 and later protect the login
+//   - [Keychain.UnlockWithEntropy] also folds in the keychain's entropy file: macOS 26.4 and later protect the login
 //     keychain with HMAC-SHA256(entropy, password), so the password alone no longer unlocks it. [Keychain.EntropyPath]
 //     locates the file and [DecodeEntropy] reads its contents.
 //   - [Keychain.UnlockWithKey] takes the 24-byte master key itself, such as one recovered from securityd's memory.

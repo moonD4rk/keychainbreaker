@@ -10,14 +10,14 @@ import (
 // It returns ErrWrongKey for a wrong password. A failed attempt leaves the keychain as it was, so another credential
 // can be tried.
 //
-// macOS 26.4 and later protect the login keychain with a per-machine entropy file in addition to the password, so
-// the password alone no longer derives the master key and this returns ErrWrongKey. Use UnlockWithEntropy for those
-// keychains; EntropyPath locates the file.
+// macOS 26.4 and later also protect the login keychain with an entropy file of its own, so the password alone no
+// longer derives the master key and this returns ErrWrongKey. Use UnlockWithEntropy for those keychains; EntropyPath
+// locates the file.
 func (kc *Keychain) UnlockWithPassword(password string) error {
 	return kc.unlock(deriveMasterKey([]byte(password), kc.dbBlob.salt))
 }
 
-// UnlockWithEntropy unlocks a login keychain that macOS 26.4 and later protect with a per-machine entropy file in
+// UnlockWithEntropy unlocks a login keychain that macOS 26.4 and later protect with its own entropy file in
 // addition to the password. The master key is derived from HMAC-SHA256(entropy, password) rather than the password
 // alone. entropy is the raw secret stored at EntropyPath; DecodeEntropy reads it from that file's contents. It
 // returns ErrWrongKey for a wrong password or entropy. A failed attempt leaves the keychain as it was.
@@ -28,8 +28,9 @@ func (kc *Keychain) UnlockWithEntropy(password string, entropy []byte) error {
 	return kc.unlock(deriveMasterKey(mixEntropy(entropy, []byte(password)), kc.dbBlob.salt))
 }
 
-// UnlockWithKey unlocks the keychain with its 24-byte master key, which works for every blob version. It returns
-// ErrWrongKey for a wrong key. A failed attempt leaves the keychain as it was, so another key can be tried.
+// UnlockWithKey unlocks the keychain with its 24-byte master key, which needs neither the password nor an entropy
+// file. It returns ErrWrongKey for a wrong key. A failed attempt leaves the keychain as it was, so another key can be
+// tried.
 func (kc *Keychain) UnlockWithKey(key []byte) error {
 	if len(key) != tripleDESKeyLen {
 		return fmt.Errorf("keychainbreaker: master key is %d bytes, want %d", len(key), tripleDESKeyLen)

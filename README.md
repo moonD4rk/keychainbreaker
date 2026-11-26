@@ -108,7 +108,7 @@ keychainbreaker hash
 # $keychain$*<salt_hex>*<iv_hex>*<ciphertext_hex>
 ```
 
-The format is accepted by hashcat (mode 23100) and John the Ripper. On a macOS 26.4+ login keychain the master key also depends on the per-machine entropy file, so no password recovers this hash; use `--key` or `--entropy` instead.
+The format is accepted by hashcat (mode 23100) and John the Ripper. On a macOS 26.4+ login keychain the master key also depends on the keychain's entropy file, so no password recovers this hash; use `dump --entropy` or `dump --key` instead.
 
 ## Go Library
 
@@ -155,17 +155,17 @@ kc, err := keychainbreaker.Open(path, keychainbreaker.WithLogger(logger)) // dia
 
 ```go
 err := kc.UnlockWithPassword("macos-login-password")   // derives the master key with PBKDF2-HMAC-SHA1
-err := kc.UnlockWithEntropy("macos-login-password", e)  // macOS 26.4+: folds in a per-machine entropy file
+err := kc.UnlockWithEntropy("macos-login-password", e)  // macOS 26.4+: also folds in the keychain's entropy file
 err := kc.UnlockWithKey(masterKey)                      // the 24-byte master key itself
 ```
 
 All return `ErrWrongKey` for a wrong credential. A failed attempt leaves the keychain as it was, so another credential can be tried; `kc.Unlocked()` reports whether one succeeded.
 
-> **macOS 26.4+ (login keychain):** since Tahoe 26.4, the login keychain is protected by a per-machine 32-byte entropy file in `/var/db/SystemKeys/` in addition to the password. The master key is derived from `HMAC-SHA256(entropy, password)`, so the password alone no longer unlocks it and `UnlockWithPassword` returns `ErrWrongKey`. The blob version (`0x200`) is unrelated — it means partition support and has since OS X 10.11.4. Apple documents the file in [Technical Note TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains); its name, location and format are explicitly not an API.
+> **macOS 26.4+ (login keychain):** since Tahoe 26.4, the login keychain is protected by its own 32-byte entropy file in `/var/db/SystemKeys/` in addition to the password. The master key is derived from `HMAC-SHA256(entropy, password)`, so the password alone no longer unlocks it and `UnlockWithPassword` returns `ErrWrongKey`. The blob version (`0x200`) is unrelated — it means partition support and dates to OS X 10.11.4. Apple documents the file in [Technical Note TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains); its name, location and format are explicitly not an API.
 
 ### Unlock a macOS 26.4+ login keychain
 
-You need the entropy file. It is 32 random bytes stored in `/var/db/SystemKeys/<SALT>`, named by the keychain's salt. The directory is readable only by root and only while [SIP is disabled](https://developer.apple.com/documentation/security/disabling-and-enabling-system-integrity-protection); Time Machine and Migration Assistant copy it with the keychain.
+You need the entropy file. It is 32 random bytes stored in `/var/db/SystemKeys/<SALT>`, named by the keychain's salt, so every keychain has its own. The directory is readable only by root and only while [SIP is disabled](https://developer.apple.com/documentation/security/disabling-and-enabling-system-integrity-protection). Copy the file along with the keychain: TN3137 warns that a keychain backed up without it may be useless.
 
 ```go
 kc, _ := keychainbreaker.Open(path)
@@ -345,7 +345,7 @@ macOS Keychain uses a three-layer encryption scheme:
 Password --> PBKDF2 --> Master Key --> DB Key --> Per-Record Keys --> Plaintext
 ```
 
-1. **Master key** derived from password via PBKDF2-HMAC-SHA1 (macOS 26.4+ first folds the password into a per-machine entropy file with `HMAC-SHA256`)
+1. **Master key** derived from password via PBKDF2-HMAC-SHA1 (macOS 26.4+ first mixes the password with the keychain's entropy file through `HMAC-SHA256`)
 2. **Database key** decrypted from the keychain's metadata blob
 3. **Per-record keys** unwrapped using RFC 3217 Triple-DES Key Wrap
 4. **Passwords/keys** decrypted using per-record keys with 3DES-CBC

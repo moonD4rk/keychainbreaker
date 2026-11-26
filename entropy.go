@@ -17,8 +17,8 @@ import (
 const systemKeysDir = "/var/db/SystemKeys"
 
 // EntropyPath returns the conventional location of this keychain's entropy file, /var/db/SystemKeys/<SALT>, where
-// macOS 26.4 and later store the per-machine secret that UnlockWithEntropy needs. The salt is the file's name, in
-// uppercase hex, the same value "security show-keychain-info -s" prints.
+// macOS 26.4 and later store the secret that UnlockWithEntropy needs, one file per keychain. The salt is the file's
+// name, in uppercase hex, the same value "security show-keychain-info -s" prints.
 //
 // The directory is readable only by root and only while System Integrity Protection is disabled, so reading the file
 // usually needs both. Apple documents (Technical Note TN3137) that the name, location and format are not an API and

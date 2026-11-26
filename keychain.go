@@ -11,8 +11,8 @@ import (
 )
 
 // Keychain is a parsed keychain file. It starts locked: record metadata, certificates and PasswordHash are available
-// at once, passwords and private keys after UnlockWithPassword or UnlockWithKey. A Keychain is safe for concurrent
-// use.
+// at once, passwords and private keys after UnlockWithPassword, UnlockWithEntropy or UnlockWithKey. A Keychain is
+// safe for concurrent use.
 type Keychain struct {
 	buf          []byte
 	tables       map[uint32]*table
@@ -151,7 +151,7 @@ func (kc *Keychain) encryptedDBKey() ([]byte, error) {
 // hex, the form hashcat (mode 23100) and John the Ripper accept. It needs no unlock.
 //
 // The hash is crackable only for keychains whose master key derives from the password alone. On macOS 26.4 and later
-// the login keychain also mixes in a per-machine entropy file (see EntropyPath), so no password recovers this hash.
+// the login keychain also mixes in its entropy file (see EntropyPath), so no password recovers this hash.
 func (kc *Keychain) PasswordHash() (string, error) {
 	encrypted, err := kc.encryptedDBKey()
 	if err != nil {

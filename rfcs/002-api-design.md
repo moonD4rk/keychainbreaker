@@ -42,7 +42,7 @@ There is no implicit default: an empty path or buffer is an error, never a silen
 // UnlockWithPassword derives the master key from the password with PBKDF2-HMAC-SHA1.
 func (kc *Keychain) UnlockWithPassword(password string) error
 
-// UnlockWithEntropy folds a per-machine entropy file into the password: macOS 26.4 and later derive the master key
+// UnlockWithEntropy folds the keychain's entropy file into the password: macOS 26.4 and later derive the master key
 // from HMAC-SHA256(entropy, password).
 func (kc *Keychain) UnlockWithEntropy(password string, entropy []byte) error
 
@@ -61,7 +61,7 @@ func DecodeEntropy(plist []byte) ([]byte, error)
 
 A wrong credential returns `ErrWrongKey`. A failed attempt changes nothing, so the caller can try another credential, and a failed attempt after a successful one keeps the keychain unlocked. A key of the wrong length is a caller error, not `ErrWrongKey`.
 
-Since macOS 26.4 (Tahoe) the login keychain is protected by a 32-byte per-machine entropy file at `/var/db/SystemKeys/<salt>`, so the password alone no longer derives the master key; `UnlockWithPassword` returns `ErrWrongKey` and the caller must use `UnlockWithEntropy`. The blob version is unrelated: `0x200` means partition support and dates to OS X 10.11.4. The file format is not a stable API (Apple TN3137), so the library isolates it in `DecodeEntropy` and leaves reading the root-only, SIP-protected directory to the caller.
+Since macOS 26.4 (Tahoe) the login keychain is protected by its own 32-byte entropy file at `/var/db/SystemKeys/<salt>`, so the password alone no longer derives the master key; `UnlockWithPassword` returns `ErrWrongKey` and the caller must use `UnlockWithEntropy`. The blob version is unrelated: `0x200` means partition support and dates to OS X 10.11.4. The file format is not a stable API (Apple TN3137), so the library isolates it in `DecodeEntropy` and leaves reading the root-only, SIP-protected directory to the caller.
 
 ### Records
 

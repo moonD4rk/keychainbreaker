@@ -56,7 +56,7 @@ Each flag belongs to the commands that use it:
 
 1. `--key`: hex-decoded (a `0x` prefix is accepted), then `UnlockWithKey`
 2. Otherwise a password: `--password` or `--password-stdin` (one trailing line ending is trimmed), else a `golang.org/x/term` prompt, only when stdin is a terminal. Without a terminal the command fails and names `--password-stdin` and `--key`. Ctrl-C at the prompt restores terminal echo before exiting.
-3. The password path then handles the macOS 26.4+ entropy file: `--entropy <file>` is used directly via `UnlockWithEntropy`; with no flag the password is tried alone first, and only on `ErrWrongKey` does the CLI read `EntropyPath()` (`/var/db/SystemKeys/<salt>`, root-only and SIP-protected) and retry with entropy. A missing entropy file leaves the original wrong-password error; an unreadable one explains that root and SIP-off, or `--entropy`, are needed.
+3. The password path then handles the macOS 26.4+ entropy file: `--entropy <file>` is used directly via `UnlockWithEntropy`; with no flag the password is tried alone first, and only on `ErrWrongKey` does the CLI read `EntropyPath()` (`/var/db/SystemKeys/<salt>`, root-only and SIP-protected) and retry with entropy. A missing entropy file leaves the original wrong-password error. An unreadable one adds that, if the password is right, root with SIP off or `--entropy` is needed: without them every name in the directory is unreadable, so a wrong password looks the same.
 
 A wrong key or password (`ErrWrongKey`) prints a warning and continues with a metadata-only export: a locked keychain still returns every record's metadata. Any other error, such as a `--key` that is not 24 bytes of hex or an unreadable `--entropy` file, fails the command. `hash` never unlocks.
 
@@ -127,7 +127,7 @@ Each password appears three ways (`password`, `hex_password`, `base64_password`)
 
 ### Output File
 
-The JSON goes to a temporary file that is created with mode `0600` next to the target and renamed into place: the secrets are never readable by other users, and a failed run leaves an earlier dump intact. `-o -` writes to stdout instead. When the command runs under `sudo` (reading an entropy file needs root), the output file is chowned to `SUDO_UID`/`SUDO_GID` so it belongs to the invoking user, not `root`.
+The JSON goes to a temporary file that is created with mode `0600` next to the target and renamed into place: the secrets are never readable by other users, and a failed run leaves an earlier dump intact. `-o -` writes to stdout instead. When the command runs as root under `sudo` (reading an entropy file needs root), the temporary file is chowned to `SUDO_UID`/`SUDO_GID` through its descriptor before the rename, so the dump appears owned by the invoking user, not `root`; if that fails, a warning is printed and the file stays owned by `root`.
 
 ### hash
 
