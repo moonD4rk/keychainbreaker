@@ -8,10 +8,12 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 )
 
-// systemKeysDir is where macOS 26.4 and later keep login keychain entropy files.
+// systemKeysDir is where macOS 26.4 and later keep login keychain entropy files. It is a fixed macOS path, so
+// EntropyPath joins it with path.Join (always "/"), never filepath.Join, whose separator depends on the host OS.
 const systemKeysDir = "/var/db/SystemKeys"
 
 // EntropyPath returns the conventional location of this keychain's entropy file, /var/db/SystemKeys/<SALT>, where
@@ -22,7 +24,7 @@ const systemKeysDir = "/var/db/SystemKeys"
 // usually needs both. Apple documents (Technical Note TN3137) that the name, location and format are not an API and
 // may change.
 func (kc *Keychain) EntropyPath() string {
-	return systemKeysDir + "/" + strings.ToUpper(hex.EncodeToString(kc.dbBlob.salt))
+	return path.Join(systemKeysDir, strings.ToUpper(hex.EncodeToString(kc.dbBlob.salt)))
 }
 
 // DecodeEntropy extracts the raw secret from the contents of an entropy file. The file is an XML property list whose
