@@ -96,6 +96,8 @@ sudo keychainbreaker dump
 keychainbreaker dump --entropy ./SystemKeys/<SALT> --password-stdin < password.txt
 ```
 
+Under `sudo` the output file is chowned back to the invoking user, so it is not left owned by `root`. To keep the whole run unprivileged, copy the entropy file out once (`sudo cat /var/db/SystemKeys/<SALT> > entropy.plist`) and pass it with `--entropy`.
+
 The output file is created with mode `0600` and replaced in one step, so the secrets are never readable by other users and an interrupted run leaves the previous file intact.
 
 ### hash

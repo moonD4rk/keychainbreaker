@@ -151,6 +151,17 @@ func TestDumpRejectsEntropyWithKey(t *testing.T) {
 	assert.Contains(t, res.err.Error(), "none of the others can be")
 }
 
+// Without sudo (or on any non-Unix host) SUDO_UID is unset or not a number, so chownToSudoUser leaves the file alone.
+func TestChownToSudoUserNoopWithoutSudo(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "dump.json")
+	require.NoError(t, os.WriteFile(file, []byte("data"), 0o600))
+	t.Setenv("SUDO_UID", "")
+	require.NoError(t, chownToSudoUser(file))
+	t.Setenv("SUDO_UID", "not-a-number")
+	t.Setenv("SUDO_GID", "not-a-number")
+	require.NoError(t, chownToSudoUser(file))
+}
+
 func TestDumpRejectsMalformedKeys(t *testing.T) {
 	tests := map[string]string{
 		"not hex":              "decode --key",

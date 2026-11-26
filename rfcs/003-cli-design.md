@@ -127,7 +127,7 @@ Each password appears three ways (`password`, `hex_password`, `base64_password`)
 
 ### Output File
 
-The JSON goes to a temporary file that is created with mode `0600` next to the target and renamed into place: the secrets are never readable by other users, and a failed run leaves an earlier dump intact. `-o -` writes to stdout instead.
+The JSON goes to a temporary file that is created with mode `0600` next to the target and renamed into place: the secrets are never readable by other users, and a failed run leaves an earlier dump intact. `-o -` writes to stdout instead. When the command runs under `sudo` (reading an entropy file needs root), the output file is chowned to `SUDO_UID`/`SUDO_GID` so it belongs to the invoking user, not `root`.
 
 ### hash
 

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -68,8 +69,28 @@ func runDump(cmd *cobra.Command, root *rootOptions, opts *dumpOptions) error {
 	if err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
+	if opts.output != stdoutPath {
+		if err := chownToSudoUser(opts.output); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not restore ownership of %s: %v\n", opts.output, err)
+		}
+	}
 	printSummary(cmd.ErrOrStderr(), records, kc.Unlocked(), opts.output)
 	return nil
+}
+
+// chownToSudoUser hands path back to the user who invoked sudo, so a dump written while running as root is not left
+// owned by root. It is a no-op when not running under sudo (SUDO_UID or SUDO_GID unset), which also covers every
+// non-Unix host, where sudo sets neither.
+func chownToSudoUser(path string) error {
+	uid, err := strconv.Atoi(os.Getenv("SUDO_UID"))
+	if err != nil {
+		return nil
+	}
+	gid, err := strconv.Atoi(os.Getenv("SUDO_GID"))
+	if err != nil {
+		return nil
+	}
+	return os.Chown(path, uid, gid)
 }
 
 func collect(kc *keychainbreaker.Keychain) (*dump, error) {
