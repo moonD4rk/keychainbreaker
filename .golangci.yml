@@ -1,10 +1,7 @@
-# golangci-lint v2 configuration
-# Compatible with Go 1.20
-# Stricter than HackBrowserData — no legacy code to accommodate
+# Shared by both modules. No run.go: each module is linted at the Go version of its own go.mod.
 version: "2"
 
 run:
-  go: "1.20"
   timeout: "5m"
   allow-parallel-runners: true
 
@@ -47,8 +44,11 @@ linters:
     # Complexity
     - gocognit
 
-    # Note: copyloopvar, intrange, modernize, perfsprint require Go 1.22+
-    # They will be enabled when Go version constraint is lifted
+    # Modern Go, gated by each module's Go version
+    - copyloopvar
+    - intrange
+    - modernize
+    - perfsprint
 
   settings:
     depguard:
@@ -138,7 +138,9 @@ formatters:
     - goimports
   settings:
     gofumpt:
-      extra-rules: true
+      extra:
+        group-params: true
+        clothe-returns: true
     goimports:
       local-prefixes:
         - github.com/moond4rk/keychainbreaker

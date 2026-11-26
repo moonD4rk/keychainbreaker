@@ -15,17 +15,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The library uses only Go standard library (zero external dependencies).
 
+## Modules and Go Versions
+
+The repository holds two Go modules:
+
+- **Library** (repository root, `github.com/moond4rk/keychainbreaker`): `go 1.20`. Consumers such as HackBrowserData build it with Go 1.20, so never raise the `go` directive, add a `toolchain` line, or use anything newer than Go 1.20 (`slices`, `maps`, `cmp`, `log/slog`, the `min`/`max`/`clear` builtins, range over int). Newer toolchains compile such code without complaint; only the Go 1.20 leg of CI catches it.
+- **CLI** (`cmd/keychainbreaker`, its own `go.mod`): latest Go. It requires the published library version, and the release workflow moves that requirement forward.
+
 ## Build and Development Commands
 
 ```bash
-go test ./...                              # Run all tests
-go test -v -race ./...                     # Run tests with race detection
-go test -cover ./...                       # Run tests with coverage
-golangci-lint run                          # Run linter
-gofumpt -l -w .                            # Format (stricter than gofmt)
-goimports -w -local github.com/moond4rk/keychainbreaker . # Format imports
-go build ./...                             # Build
+go work init . ./cmd/keychainbreaker            # Once per clone: build the CLI against the local library (go.work is gitignored)
+GOWORK=off go test -race ./...                  # Library tests
+(cd cmd/keychainbreaker && go test -race ./...) # CLI tests, against the local library
+golangci-lint run                               # Lint the library; run it in cmd/keychainbreaker for the CLI
+golangci-lint fmt                               # Format (gofumpt + goimports)
 ```
+
+## Release
+
+Run the Release workflow with a version such as `v0.3.0`; `dry-run` tests and builds a snapshot without publishing. It tags the library on `main`, waits for the Go module proxy, and opens a `chore(release): <version>` pull request that points the CLI at the new library. Merging that pull request tags `cmd/keychainbreaker/<version>` on the merge commit and publishes the binaries and the Homebrew cask.
 
 ## Code Quality Standards
 

@@ -4,123 +4,240 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g., v0.1.0)"
+        description: Version for the library and the CLI, e.g. v0.3.0
         required: true
+        type: string
+      dry-run:
+        description: Test and build a snapshot without tagging or publishing anything
+        type: boolean
+        default: false
+  # Merging the release pull request changes the CLI's library requirement; that push tags and ships the CLI
+  push:
+    branches:
+      - main
+    paths:
+      - cmd/keychainbreaker/go.mod
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  MODULE: github.com/moond4rk/keychainbreaker
 
 jobs:
-  release:
+  library:
+    name: Tag the library and open the release pull request
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ inputs.version }}
+      DRY_RUN: ${{ inputs.dry-run }}
     steps:
-      # A moond4rk-ci token scoped to this repo so the tag push and the CLI bump
-      # PR are attributed to the app, and so the PR triggers CI (a PR opened with
-      # the default GITHUB_TOKEN does not fire pull_request workflows).
-      - name: Mint release token
-        id: release-token
-        uses: actions/create-github-app-token@v3
+      - name: Check the version and the branch
+        run: |
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::invalid version: $VERSION"
+            exit 1
+          fi
+          if [[ "$DRY_RUN" != true && "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "::error::release from main, not $GITHUB_REF"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the version is free
+        run: |
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            echo "::error::$VERSION already exists"
+            exit 1
+          fi
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Test the library
+        env:
+          GOWORK: "off"
+        run: go test ./...
+
+      - name: Test the CLI against this commit's library
+        run: |
+          go work init . ./cmd/keychainbreaker
+          cd cmd/keychainbreaker
+          go vet ./...
+          go test ./...
+
+      - name: Build a snapshot
+        if: inputs.dry-run
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GORELEASER_CURRENT_TAG: ${{ inputs.version }}
+
+      - name: Drop the workspace
+        run: rm -f go.work go.work.sum
+
+      - name: Mint the release token
+        if: ${{ !inputs.dry-run }}
+        id: token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.MOOND4RK_CI_RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.MOOND4RK_CI_RELEASE_APP_PRIVATE_KEY }}
           owner: moonD4rk
           repositories: keychainbreaker
+          permission-contents: write
+          permission-pull-requests: write
 
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          token: ${{ steps.release-token.outputs.token }}
+      - name: Tag the library
+        if: ${{ !inputs.dry-run }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$VERSION" -f "sha=$GITHUB_SHA" --silent
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: cmd/keychainbreaker/go.mod
-
-      - name: Validate version
+      - name: Wait for the Go module proxy
+        if: ${{ !inputs.dry-run }}
         run: |
-          VERSION="${{ github.event.inputs.version }}"
-          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
-            echo "Invalid version format: $VERSION"
-            exit 1
-          fi
-
-      - name: Configure git
-        run: |
-          git config user.name "moond4rk-ci[bot]"
-          git config user.email "299850723+moond4rk-ci[bot]@users.noreply.github.com"
-
-      # Stage 1: Tag and publish library
-      - name: Tag library
-        run: |
-          git tag "${{ github.event.inputs.version }}"
-          git push origin "${{ github.event.inputs.version }}"
-
-      - name: Wait for Go module proxy
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
-          MODULE="github.com/moond4rk/keychainbreaker"
-          for i in $(seq 1 30); do
-            if curl -sf "https://proxy.golang.org/${MODULE}/@v/${VERSION}.info" > /dev/null; then
-              echo "Module indexed successfully"
+          for attempt in $(seq 1 30); do
+            if curl -fsS "https://proxy.golang.org/$MODULE/@v/$VERSION.info"; then
               exit 0
             fi
-            echo "Attempt $i/30: waiting for proxy..."
+            echo "attempt $attempt/30: $MODULE@$VERSION is not indexed yet"
             sleep 10
           done
-          echo "Timeout waiting for Go module proxy"
+          echo "::error::proxy.golang.org did not index $MODULE@$VERSION"
           exit 1
 
-      # Stage 2: Update CLI go.mod, commit on branch, tag CLI
-      - name: Update CLI and tag
+      # Builds against the published module, exactly what `go install ...@latest` will resolve
+      - name: Point the CLI at the new library
+        if: ${{ !inputs.dry-run }}
+        working-directory: cmd/keychainbreaker
+        env:
+          GOWORK: "off"
         run: |
-          VERSION="${{ github.event.inputs.version }}"
-          BRANCH="chore/cli-${VERSION}"
+          go get "$MODULE@$VERSION"
+          go mod tidy
+          go build ./...
 
-          git checkout -b "${BRANCH}"
+      - name: Open the release pull request
+        if: ${{ !inputs.dry-run }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          branch="release/$VERSION"
+          git config user.name "moond4rk-ci[bot]"
+          git config user.email "299850723+moond4rk-ci[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -m "chore(release): $VERSION" -- cmd/keychainbreaker/go.mod cmd/keychainbreaker/go.sum
+          git push "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git" "$branch"
+          gh pr create --base main --head "$branch" --title "chore(release): $VERSION" \
+            --body "Points the CLI at library $VERSION. Merging tags cmd/keychainbreaker/$VERSION on the merge commit and publishes the release."
+          gh pr merge "$branch" --auto --squash
 
-          cd cmd/keychainbreaker
-          GOWORK=off go mod edit -require "github.com/moond4rk/keychainbreaker@${VERSION}"
-          GOWORK=off go mod tidy
-          cd ../..
+  cli:
+    name: Tag and publish the CLI
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-          git add cmd/keychainbreaker/go.mod cmd/keychainbreaker/go.sum
-          git diff --cached --quiet && exit 0
-          git commit -m "chore: update CLI dependency to ${VERSION}"
-          git tag "cmd/keychainbreaker/${VERSION}"
-          git push origin "${BRANCH}" "cmd/keychainbreaker/${VERSION}"
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: stable
+          cache: false
 
-      # Stage 3: Build and release. Mint a homebrew-tap-scoped token first so
-      # GoReleaser pushes the formula update via the moond4rk-ci app, not a PAT.
-      # --skip=validate: HEAD is one commit ahead of the library tag (go.mod update),
-      # same approach as things3.
-      - name: Mint homebrew-tap token
+      - name: Find the release this push completes
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(go mod edit -json cmd/keychainbreaker/go.mod | jq -r --arg module "$MODULE" '.Require[] | select(.Path == $module) | .Version')
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "the CLI requires $MODULE $version, which is not a release"
+            exit 0
+          fi
+          if gh release view "$version" >/dev/null 2>&1; then
+            echo "$version is already released"
+            exit 0
+          fi
+          if ! git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
+            echo "::error::the CLI requires $MODULE $version, which has no tag"
+            exit 1
+          fi
+          previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$version^" 2>/dev/null || true)
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "previous=$previous" >>"$GITHUB_OUTPUT"
+
+      - name: Mint the release token
+        if: steps.release.outputs.version
+        id: token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.MOOND4RK_CI_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MOOND4RK_CI_RELEASE_APP_PRIVATE_KEY }}
+          owner: moonD4rk
+          repositories: keychainbreaker
+          permission-contents: write
+
+      - name: Mint the Homebrew tap token
+        if: steps.release.outputs.version
         id: tap-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.MOOND4RK_CI_RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.MOOND4RK_CI_RELEASE_APP_PRIVATE_KEY }}
           owner: moonD4rk
           repositories: homebrew-tap
+          permission-contents: write
 
-      - uses: goreleaser/goreleaser-action@v7
+      - name: Tag the CLI on this commit
+        if: steps.release.outputs.version
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TAG: cmd/keychainbreaker/${{ steps.release.outputs.version }}
+        run: |
+          tagged=$(git rev-parse -q --verify "refs/tags/$TAG^{commit}" || true)
+          if [[ -z "$tagged" ]]; then
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA" --silent
+          elif [[ "$tagged" != "$GITHUB_SHA" ]]; then
+            echo "::error::$TAG already points at $tagged"
+            exit 1
+          fi
+
+      - name: Publish
+        if: steps.release.outputs.version
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           version: "~> v2"
+          # validate would reject HEAD: the library tag sits one commit behind, before the release commit
           args: release --clean --skip=validate
         env:
-          GITHUB_TOKEN: ${{ steps.release-token.outputs.token }}
-          GORELEASER_CURRENT_TAG: ${{ github.event.inputs.version }}
+          GITHUB_TOKEN: ${{ steps.token.outputs.token }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ steps.tap-token.outputs.token }}
-
-      # Stage 4: Create PR to merge go.mod update into main
-      - name: Create go.mod update PR
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
-          BRANCH="chore/cli-${VERSION}"
-          PR_URL=$(gh pr create \
-            --title "chore: update CLI dependency to ${VERSION}" \
-            --body "Auto-generated by release workflow. Updates \`cmd/keychainbreaker/go.mod\` to require library ${VERSION}." \
-            --base main \
-            --head "${BRANCH}")
-          gh pr merge "${PR_URL}" --auto --squash --delete-branch
-        env:
-          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+          GORELEASER_CURRENT_TAG: ${{ steps.release.outputs.version }}
+          GORELEASER_PREVIOUS_TAG: ${{ steps.release.outputs.previous }}

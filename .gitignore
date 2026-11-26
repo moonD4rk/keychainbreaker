@@ -10,6 +10,7 @@
 !go.sum
 
 # === Project root config ===
+!.gitattributes
 !.gitignore
 !.golangci.yml
 !.goreleaser.yml
@@ -22,6 +23,7 @@
 !README.md
 
 # === GitHub ===
+!.github/dependabot.yml
 !.github/workflows/*.yml
 
 # === RFCs ===
