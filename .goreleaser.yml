@@ -23,6 +23,10 @@ builds:
 archives:
   - formats:
       - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
@@ -33,7 +37,17 @@ changelog:
   sort: asc
   filters:
     exclude:
-      - "^chore: release"
+      - '^.*?chore\(release\):'
+      - "^.*?chore: update CLI dependency"
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
 
 release:
   github:
@@ -42,12 +56,12 @@ release:
   draft: false
   prerelease: auto
 
-brews:
+homebrew_casks:
   - name: keychainbreaker
+    binaries:
+      - keychainbreaker
     homepage: "https://github.com/moonD4rk/keychainbreaker"
     description: "Extract credentials from macOS Keychain files"
-    license: "Apache-2.0"
-    directory: Formula
     skip_upload: auto
     repository:
       owner: moonD4rk
@@ -57,11 +71,11 @@ brews:
     commit_author:
       name: "moond4rk-ci[bot]"
       email: "299850723+moond4rk-ci[bot]@users.noreply.github.com"
-    commit_msg_template: "brew formula update for {{ .ProjectName }} version {{ .Tag }}"
-    install: |
-      bin.install "keychainbreaker"
-    test: |
-      system "#{bin}/keychainbreaker", "version"
-    caveats: |
-      keychainbreaker reads macOS Keychain files (login.keychain-db).
-      The keychain file must be accessible to extract credentials.
+    commit_msg_template: "brew cask update for {{ .ProjectName }} version {{ .Tag }}"
+    hooks:
+      post:
+        # The binary is not signed or notarized, so Gatekeeper would refuse to run it
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/keychainbreaker"]
+          end

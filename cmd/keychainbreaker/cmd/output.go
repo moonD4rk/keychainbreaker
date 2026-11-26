@@ -15,7 +15,7 @@ type dumpOutput struct {
 	Certificates      []keychainbreaker.Certificate      `json:"certificates,omitempty"`
 }
 
-func writeJSONFile(path string, v interface{}) error {
+func writeJSONFile(path string, v any) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("create output file: %w", err)

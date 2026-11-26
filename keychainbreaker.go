@@ -4,6 +4,7 @@ package keychainbreaker
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -194,12 +195,12 @@ func parse(buf []byte, logger Logger) (*Keychain, error) {
 func (kc *Keychain) extractDBBlob() error {
 	metaTable, ok := kc.tables[tableMetadata]
 	if !ok {
-		return fmt.Errorf("metadata table not found")
+		return errors.New("metadata table not found")
 	}
 
 	kc.blobBaseAddr = metaTable.baseOffset + metadataOffsetAdjustment
 	if kc.blobBaseAddr+dbBlobSize > len(kc.buf) {
-		return fmt.Errorf("db blob exceeds file size")
+		return errors.New("db blob exceeds file size")
 	}
 
 	blob, err := parseDBBlob(kc.buf[kc.blobBaseAddr : kc.blobBaseAddr+dbBlobSize])
@@ -437,7 +438,7 @@ func (kc *Keychain) PrivateKeys() ([]PrivateKey, error) {
 func (kc *Keychain) decryptPrivateKey(rec *record) (PrivateKey, error) {
 	data := rec.rawPayload
 	if len(data) < keyBlobLen {
-		return PrivateKey{}, fmt.Errorf("private key blob too small")
+		return PrivateKey{}, errors.New("private key blob too small")
 	}
 
 	blob, err := parseKeyBlob(data[:keyBlobLen])
@@ -451,7 +452,7 @@ func (kc *Keychain) decryptPrivateKey(rec *record) (PrivateKey, error) {
 	cipherStart := int(blob.startCryptoBlob)
 	cipherEnd := int(blob.totalLength)
 	if cipherEnd > len(data) || cipherStart >= cipherEnd {
-		return PrivateKey{}, fmt.Errorf("invalid cipher bounds")
+		return PrivateKey{}, errors.New("invalid cipher bounds")
 	}
 
 	plain, err := privateKeyDecrypt(data[cipherStart:cipherEnd], blob.iv, kc.dbKey)
@@ -537,7 +538,7 @@ func (kc *Keychain) decryptBlob(rec *record) ([]byte, error) {
 	keyIndex = append(keyIndex, block.label...)
 	dbkey, ok := kc.keyList[string(keyIndex)]
 	if !ok {
-		return nil, fmt.Errorf("no matching key for SSGP label")
+		return nil, errors.New("no matching key for SSGP label")
 	}
 
 	plain, err := kcDecrypt(dbkey, block.iv, block.encryptedPassword)

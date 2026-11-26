@@ -43,7 +43,7 @@ func kcDecrypt(key, iv, data []byte) ([]byte, error) {
 	}
 	for _, b := range plain[len(plain)-pad:] {
 		if int(b) != pad {
-			return nil, fmt.Errorf("padding verification failed")
+			return nil, errors.New("padding verification failed")
 		}
 	}
 	return plain[:len(plain)-pad], nil

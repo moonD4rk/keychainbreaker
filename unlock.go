@@ -2,6 +2,7 @@ package keychainbreaker
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -123,7 +124,7 @@ func deriveMasterKey(cfg *unlockConfig, kc *Keychain) ([]byte, error) {
 		}
 		return generateMasterKey(cfg.password, kc.dbBlob.salt), nil
 	default:
-		return nil, fmt.Errorf("no unlock method provided")
+		return nil, errors.New("no unlock method provided")
 	}
 }
 
@@ -206,7 +207,7 @@ func (kc *Keychain) generateKeyList() error {
 func extractKeyBlob(rec *record) (index, ciphertext, iv []byte, err error) {
 	data := rec.rawPayload
 	if len(data) < keyBlobLen {
-		return nil, nil, nil, fmt.Errorf("keyblob structure incomplete")
+		return nil, nil, nil, errors.New("keyblob structure incomplete")
 	}
 
 	blob, err := parseKeyBlob(data[:keyBlobLen])
@@ -219,23 +220,23 @@ func extractKeyBlob(rec *record) (index, ciphertext, iv []byte, err error) {
 
 	ssgpOffset := int(blob.totalLength) + ssgpMagicOffset
 	if ssgpOffset+4 > len(data) {
-		return nil, nil, nil, fmt.Errorf("ssgp check exceeds record")
+		return nil, nil, nil, errors.New("ssgp check exceeds record")
 	}
 	if string(data[ssgpOffset:ssgpOffset+4]) != secureStorageGroup {
-		return nil, nil, nil, fmt.Errorf("keyblob not part of secure storage group")
+		return nil, nil, nil, errors.New("keyblob not part of secure storage group")
 	}
 
 	cipherStart := int(blob.startCryptoBlob)
 	cipherEnd := int(blob.totalLength)
 	if cipherEnd > len(data) || cipherStart >= cipherEnd {
-		return nil, nil, nil, fmt.Errorf("invalid cipher bounds")
+		return nil, nil, nil, errors.New("invalid cipher bounds")
 	}
 	ciphertext = append([]byte{}, data[cipherStart:cipherEnd]...)
 
 	indexStart := ssgpOffset
 	indexEnd := indexStart + 20
 	if indexEnd > len(data) {
-		return nil, nil, nil, fmt.Errorf("key index exceeds record length")
+		return nil, nil, nil, errors.New("key index exceeds record length")
 	}
 	index = append([]byte{}, data[indexStart:indexEnd]...)
 	iv = append([]byte{}, blob.iv...)
