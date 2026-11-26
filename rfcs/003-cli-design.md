@@ -1,74 +1,69 @@
 # RFC 003: CLI Tool Design
 
-Status: Draft
-Author: @moonD4rk
-Date: 2026-03-30
+Status: Implemented Author: @moonD4rk Date: 2026-03-30 Updated: 2026-11-26
 
 ## Summary
 
-A standalone CLI tool under `cmd/keychainbreaker/` that exports all keychain
-data to a single JSON file. The CLI has its own Go module so that its
-dependencies (Cobra, x/term) never leak into the zero-dependency library.
-
-Architecture follows the same pattern as `github.com/moond4rk/things3/cmd/things3`:
-separate module, `go.work` for local dev, two-stage release via GoReleaser.
+A standalone CLI under `cmd/keychainbreaker/` that exports keychain records to JSON and prints the keychain password hash. It is a Go module of its own, so its dependencies (Cobra, x/term) never reach the zero-dependency library, and so it can use the latest Go while the library stays on Go 1.20.
 
 ## 1. Module Layout
 
 ```
 keychainbreaker/
-  go.mod                        # library (zero dependencies, Go 1.20)
-  go.work                       # local dev only (not committed)
+  go.mod                  # library: go 1.20, no dependencies
+  go.work                 # local development only (gitignored)
   cmd/keychainbreaker/
-    go.mod                      # CLI module (cobra, x/term, library, Go 1.26)
-    main.go
-    cmd/
-      root.go                   # global flags
-      dump.go                   # export all data -> JSON file
-      hash.go                   # export hash -> stdout
-      version.go                # build info
-      output.go                 # JSON types and file writing
+    go.mod                # CLI: latest Go; cobra, x/term, the published library
+    main.go               # entry point
+    root.go               # root command and --verbose
+    keychain.go           # locating, opening and unlocking the keychain
+    dump.go               # dump command and the output file
+    records.go            # JSON document types
+    hash.go               # hash command
+    version.go            # version command
 ```
 
-CLI dependencies: `spf13/cobra`, `golang.org/x/term`, library itself.
+Everything is in `package main`, which no other module can import.
 
 ## 2. Commands and Flags
 
 ```
-keychainbreaker [global flags] <command>
+keychainbreaker [-v] <command> [flags]
 
 Commands:
-  dump       Export all keychain data to a JSON file
-  hash       Print password hash to stdout (no unlock needed)
-  version    Print version info
-
-Global Flags:
-  -f, --file <path>        Keychain file (default: ~/Library/Keychains/login.keychain-db)
-  -p, --password <pwd>     Keychain password (omit to prompt interactively)
-  -k, --key <hex>          Raw hex-encoded 24-byte master key
-  -o, --output <path>      Output file path (default: ./keychain_dump.json)
+  dump       Export all keychain records to JSON
+  hash       Print the keychain password hash for offline cracking
+  version    Print version information
 ```
+
+Each flag belongs to the commands that use it:
+
+| Flag | Commands | Meaning |
+| --- | --- | --- |
+| `-v, --verbose` | all | Library diagnostics on stderr, through `log/slog` |
+| `-f, --file` | dump, hash | Keychain file; default `~/Library/Keychains/login.keychain-db` |
+| `-p, --password` | dump | Keychain password; other local users can see it |
+| `--password-stdin` | dump | Read the password from stdin |
+| `-k, --key` | dump | Hex-encoded 24-byte master key |
+| `-o, --output` | dump | Output file, or `-` for stdout; default `keychain_dump.json` |
+
+`--password`, `--password-stdin` and `--key` are mutually exclusive.
 
 ### Unlock Flow
 
-The `dump` command uses `TryUnlock` so that metadata is always exported,
-even when the password is wrong or unavailable:
+`dump` unlocks with the credential it is given:
 
-1. If `--key` is set, `TryUnlock(WithKey(...))`
-2. If `--password` is set, `TryUnlock(WithPassword(...))`
-3. Otherwise, prompt via `golang.org/x/term.ReadPassword()`, then `TryUnlock(WithPassword(...))`
-4. On wrong password, `TryUnlock` returns `ErrWrongKey` -- CLI prints a
-   warning to stderr and continues with metadata-only export
-5. Check `kc.Unlocked()` to report whether data is fully decrypted
+1. `--key`: `TryUnlock(WithKey(...))`
+2. `--password` or `--password-stdin` (one trailing line ending is trimmed): `TryUnlock(WithPassword(...))`
+3. Neither: a `golang.org/x/term` prompt, only when stdin is a terminal. Without a terminal the command fails and names `--password-stdin` and `--key`. Ctrl-C at the prompt restores terminal echo before exiting.
 
-The `hash` command skips unlock entirely.
+A wrong key or password (`ErrWrongKey`), and a v2 keychain that a password cannot unlock offline (`ErrUnsupportedBlobVersion`), print a warning and continue with a metadata-only export. Any other error fails the command. `hash` never unlocks.
 
 ## 3. JSON Output
 
-Single file, all keys use **snake_case**. Empty fields omitted (`omitempty`).
+The CLI owns the document: `records.go` maps the library's records into types that exist only for output, so the library's types carry no JSON tags. Keys are snake_case, empty values are omitted (`omitempty`, and `omitzero` for timestamps).
 
-Passwords are output in three formats simultaneously (plaintext, hex, base64).
-Binary data (private key, certificate) is output in two formats (hex, base64).
+Each password appears three ways (`password`, `hex_password`, `base64_password`) because a secret need not be valid UTF-8; key and certificate data appear as `data_hex` and `data_base64`.
 
 ```json
 {
@@ -79,57 +74,72 @@ Binary data (private key, certificate) is output in two formats (hex, base64).
       "password": "password#123",
       "hex_password": "70617373776f726423313233",
       "base64_password": "cGFzc3dvcmQjMTIz",
-      "description": "test password",
+      "description": "application password",
+      "comment": "test generic password",
+      "creator": "mD4k",
+      "type": "note",
       "print_name": "moond4rk.com",
-      "created_at": "2024-01-15T10:30:00Z",
-      "modified_at": "2024-01-15T10:30:00Z"
+      "created_at": "2026-03-27T15:36:43Z",
+      "modified_at": "2026-03-27T15:36:43Z"
     }
   ],
   "internet_passwords": [
     {
       "server": "moond4rk.com",
-      "port": 443,
-      "protocol": "htps",
       "account": "admin",
       "password": "password#123",
       "hex_password": "70617373776f726423313233",
-      "base64_password": "cGFzc3dvcmQjMTIz"
+      "base64_password": "cGFzc3dvcmQjMTIz",
+      "security_domain": "moond4rk.com",
+      "protocol": "htps",
+      "port": 443,
+      "path": "/login",
+      "print_name": "moond4rk.com"
     }
   ],
   "private_keys": [
     {
-      "name": "keychainbreaker-test",
+      "data_hex": "308204bd0201...",
+      "data_base64": "MIIEvQIBADAN...",
+      "print_name": "93B7C5C0",
+      "key_class": 16,
       "key_type": 42,
-      "key_size": 2048,
-      "data_hex": "3082...",
-      "data_base64": "MIIEvQ..."
+      "key_size": 2048
     }
   ],
   "certificates": [
     {
+      "data_hex": "308203213082...",
+      "data_base64": "MIIDITCCAgmg...",
+      "type": 1,
+      "encoding": 3,
       "print_name": "keychainbreaker-test",
-      "subject": "...",
-      "issuer": "...",
-      "serial": "01",
-      "data_hex": "3082...",
-      "data_base64": "MIIDxTCCAq2..."
+      "subject_hex": "301f311d301b...",
+      "issuer_hex": "301f311d301b...",
+      "serial_hex": "51946dcaf718..."
     }
   ]
 }
 ```
 
-### hash command
+### Output File
 
-Prints directly to stdout, no JSON wrapping:
+The JSON goes to a temporary file that is created with mode `0600` next to the target and renamed into place: the secrets are never readable by other users, and a failed run leaves an earlier dump intact. `-o -` writes to stdout instead.
+
+### hash
+
+Prints one line to stdout, with no JSON:
 
 ```
 $ keychainbreaker hash
 $keychain$*<salt_hex>*<iv_hex>*<ciphertext_hex>
 ```
 
-Compatible with hashcat mode 23100 and John the Ripper.
+hashcat (mode 23100) and John the Ripper accept it.
 
 ## 4. Stderr Feedback
+
+Stdout carries only the requested data; everything else goes to stderr.
 
 ```
 $ keychainbreaker dump
@@ -140,61 +150,49 @@ Extracted:
   Internet passwords: 15
   Private keys:       2
   Certificates:       8
-Output: ./keychain_dump.json
+Output: keychain_dump.json
 ```
 
-When the password is wrong:
+With a wrong password:
 
 ```
 $ keychainbreaker dump -p "wrong"
 Keychain: /Users/user/Library/Keychains/login.keychain-db
-Warning: wrong key or password, exporting metadata only
+Warning: keychainbreaker: wrong key or password: ...; exporting metadata only
 Extracted:
   Generic passwords:  42 (metadata only)
   Internet passwords: 15 (metadata only)
-  Private keys:       2  (metadata only)
+  Private keys:       2 (metadata only)
   Certificates:       8
-Output: ./keychain_dump.json
+Output: keychain_dump.json
 ```
-
-Stdout stays clean; all user-facing messages go to stderr.
 
 ## 5. Version
 
-Dual-method: ldflags injection for release builds, `debug.ReadBuildInfo()`
-fallback for dev builds. Same pattern as things3.
+Release builds get the version, commit and build date through `-ldflags -X`; other builds fall back to `debug.ReadBuildInfo()`.
 
 ```
 $ keychainbreaker version
-keychainbreaker 0.1.0
+keychainbreaker 0.3.0
   commit: abc12345
-  built:  2026-03-30T12:00:00Z
+  built:  2026-11-26T12:00:00Z
 ```
 
 ## 6. Release
 
-Two-stage `workflow_dispatch` release:
+The CLI is released with the library, under the same version, in two steps:
 
-1. Tag library `vX.Y.Z`, push, wait for Go module proxy indexing
-2. Create branch, update `cmd/keychainbreaker/go.mod`, commit, tag `cmd/keychainbreaker/vX.Y.Z`
-3. GoReleaser builds cross-platform binaries (darwin/linux/windows, amd64/arm64, CGO_ENABLED=0)
-4. Publish to GitHub Releases + Homebrew tap
-5. Auto-create PR to merge go.mod update into main (auto-merge via squash)
-
-The CLI tag points to the commit with the updated go.mod, ensuring
-`go install` resolves the correct library version. The go.mod update
-is merged into main via PR to respect branch protection rules.
+1. Running the Release workflow tests both modules, tags the library `vX.Y.Z` on `main`, waits for proxy.golang.org, points `cmd/keychainbreaker/go.mod` at the published module, builds the CLI against it, and opens `chore(release): vX.Y.Z` with auto-merge.
+2. Merging that pull request tags `cmd/keychainbreaker/vX.Y.Z` on the merge commit, so the tag is on `main` and `go install ...@latest` resolves the library version that `go.mod` names. GoReleaser then publishes darwin, linux and windows binaries for amd64 and arm64 (`CGO_ENABLED=0`), the GitHub release and the Homebrew cask.
 
 ## 7. Checklist
 
-- [x] `cmd/keychainbreaker/go.mod` (separate module, Go 1.26)
-- [x] `go.work` at root (not committed)
-- [x] Root command with global flags
-- [x] `dump` command with triple password encoding
-- [x] `hash` command (stdout)
-- [x] `version` command
-- [x] Interactive password prompt (`x/term`)
-- [x] JSON output types (snake_case, omitempty)
-- [x] `.goreleaser.yml`
-- [x] `.github/workflows/release.yml`
-- [x] Homebrew tap
+- [x] Separate module on the latest Go, `go.work` for local development
+- [x] Internal command package
+- [x] Flags scoped to the commands that use them; mutually exclusive credentials
+- [x] `--password-stdin`, and a prompt only on a terminal
+- [x] CLI-owned JSON types with three password encodings
+- [x] Output file created `0600` and replaced atomically; `-o -` for stdout
+- [x] `log/slog` diagnostics behind `--verbose`
+- [x] Command tests against the fixture in `testdata/`
+- [x] Release workflow that tags the CLI on `main`; GoReleaser and Homebrew cask

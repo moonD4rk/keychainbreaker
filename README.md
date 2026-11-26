@@ -22,11 +22,10 @@ Works on any OS (Linux, macOS, Windows). No CGO. No macOS APIs. Just reads the b
 **Homebrew**
 
 ```bash
-brew tap moond4rk/tap
 brew install moond4rk/tap/keychainbreaker
 ```
 
-**Go install** (requires Go 1.26+)
+**Go install** (requires Go 1.27+)
 
 ```bash
 go install github.com/moond4rk/keychainbreaker/cmd/keychainbreaker@latest
@@ -40,22 +39,34 @@ Download from [GitHub Releases](https://github.com/moonD4rk/keychainbreaker/rele
 
 ```
 $ keychainbreaker -h
+Usage:
+  keychainbreaker [command]
 
-Commands:
-  dump        Export all keychain data to a JSON file
-  hash        Print password hash for offline cracking (no unlock needed)
+Available Commands:
+  completion  Generate the autocompletion script for the specified shell
+  dump        Export all keychain records to JSON
+  hash        Print the keychain password hash for offline cracking
+  help        Help about any command
   version     Print version information
 
 Flags:
-  -f, --file string       Keychain file path (default: ~/Library/Keychains/login.keychain-db)
-  -p, --password string   Keychain password (omit to be prompted)
-  -k, --key string        Hex-encoded 24-byte master key
-  -o, --output string     Output file path (default: ./keychain_dump.json)
+  -h, --help      help for keychainbreaker
+  -v, --verbose   print diagnostics to stderr
 ```
+
+Every command reads `~/Library/Keychains/login.keychain-db` unless `-f/--file` names another keychain. Progress and warnings go to stderr, so stdout carries only the requested data.
 
 ### dump
 
-Export all keychain data (passwords, keys, certificates) to a single JSON file. Passwords are output in three formats: plaintext, hex, and base64.
+Export generic and internet passwords, private keys and certificates to JSON. Each password appears three ways (`password`, `hex_password`, `base64_password`) because a secret need not be valid text; key and certificate data appear as hex and base64.
+
+```
+-f, --file string       keychain file (default ~/Library/Keychains/login.keychain-db)
+-k, --key string        hex-encoded 24-byte master key, used instead of the password
+-o, --output string     output file, or "-" for stdout (default "keychain_dump.json")
+-p, --password string   keychain password; other local users can see it, prefer --password-stdin or the prompt
+    --password-stdin    read the keychain password from stdin
+```
 
 ```
 $ keychainbreaker dump
@@ -70,23 +81,27 @@ Output: keychain_dump.json
 ```
 
 ```bash
-# Specify keychain file and password
-keychainbreaker dump -f /path/to/login.keychain-db -p "password"
+# Read the password from stdin instead of the prompt
+keychainbreaker dump -f /path/to/login.keychain-db --password-stdin < password.txt
 
-# Export to a specific file
-keychainbreaker dump -o result.json
+# Unlock with a recovered master key and pipe the JSON
+keychainbreaker dump --key <48-char-hex> -o - | jq '.generic_passwords[].service'
 
-# Wrong password: still exports metadata (service, account, timestamps, certs)
+# Wrong password: still exports metadata (service, account, timestamps, certificates)
 keychainbreaker dump -p "wrong"
 ```
+
+The output file is created with mode `0600` and replaced in one step, so the secrets are never readable by other users and an interrupted run leaves the previous file intact.
 
 ### hash
 
 ```bash
-# Export hash for offline cracking (no password needed)
+# Export the hash for offline cracking (no password needed)
 keychainbreaker hash
 # $keychain$*<salt_hex>*<iv_hex>*<ciphertext_hex>
 ```
+
+The format is accepted by hashcat (mode 23100) and John the Ripper.
 
 ## Go Library
 

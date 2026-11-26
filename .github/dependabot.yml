@@ -26,6 +26,8 @@ updates:
     ignore:
       # The release workflow moves the CLI to each new library version
       - dependency-name: github.com/moond4rk/keychainbreaker
+      # pflag 1.1 prints bool flags as --flag[=true|false]; take it only when cobra requires it
+      - dependency-name: github.com/spf13/pflag
     groups:
       cli:
         patterns:
