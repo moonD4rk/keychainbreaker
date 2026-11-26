@@ -114,8 +114,9 @@ func (c *credentials) unlockWithPassword(kc *keychainbreaker.Keychain, password 
 	case errors.Is(readErr, fs.ErrNotExist):
 		return err
 	default:
-		return fmt.Errorf("%w; this looks like a macOS 26.4+ login keychain whose entropy file could not be read "+
-			"(%v): run as root with SIP disabled, or pass --entropy", err, readErr)
+		// Unless root with SIP off, every SystemKeys lookup fails, so a wrong password looks like an unreadable file.
+		return fmt.Errorf("%w; if the password is right, this may be a macOS 26.4+ login keychain whose entropy file "+
+			"could not be read (%v): run as root with SIP disabled, or pass --entropy", err, readErr)
 	}
 }
 
