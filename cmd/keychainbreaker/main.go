@@ -1,15 +1,14 @@
+// Keychainbreaker extracts passwords, private keys and certificates from macOS Keychain files.
 package main
 
 import (
 	"fmt"
 	"os"
-
-	"github.com/moond4rk/keychainbreaker/cmd/keychainbreaker/cmd"
 )
 
 func main() {
-	if err := cmd.NewRootCmd().Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	if err := newRootCmd().Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 }
