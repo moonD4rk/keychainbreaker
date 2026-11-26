@@ -2,65 +2,27 @@
 
 [![Go CI](https://github.com/moonD4rk/keychainbreaker/actions/workflows/ci.yml/badge.svg)](https://github.com/moonD4rk/keychainbreaker/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/moonD4rk/keychainbreaker/branch/main/graph/badge.svg)](https://codecov.io/gh/moonD4rk/keychainbreaker) [![Go Reference](https://pkg.go.dev/badge/github.com/moond4rk/keychainbreaker.svg)](https://pkg.go.dev/github.com/moond4rk/keychainbreaker) [![License](https://img.shields.io/github/license/moonD4rk/keychainbreaker)](https://github.com/moonD4rk/keychainbreaker/blob/main/LICENSE)
 
-Go library for reading and decrypting macOS Keychain files (`login.keychain-db`). Supports OS X 10.6 (Snow Leopard) through macOS 26 (Tahoe).
+A Go library and CLI that read and decrypt macOS Keychain files (`login.keychain-db`). It parses the file itself, so it runs on Linux, macOS and Windows with no CGO and no macOS APIs, and extracts:
 
-## What It Does
+- **Generic passwords**: app credentials such as Chrome Safe Storage or Wi-Fi passwords
+- **Internet passwords**: website, server and file share credentials
+- **Private keys** (PKCS#8) and **X.509 certificates**
 
-Open a macOS Keychain file, unlock it with the user's password, and extract:
-
-- **Generic passwords** -- app-stored credentials (Chrome Safe Storage, Wi-Fi, etc.)
-- **Internet passwords** -- web and network credentials (GitHub tokens, Docker registry, SMB shares, etc.)
-- **Private keys** -- RSA/EC private keys stored in the keychain
-- **X.509 certificates** -- DER-encoded certificates
-
-Works on any OS (Linux, macOS, Windows). No CGO. No macOS APIs. Just reads the binary file.
-
-## CLI Tool
-
-### Install
-
-**Homebrew**
+## CLI
 
 ```bash
 brew install moond4rk/tap/keychainbreaker
+go install github.com/moond4rk/keychainbreaker/cmd/keychainbreaker@latest # Go 1.27+
 ```
 
-**Go install** (requires Go 1.27+)
-
-```bash
-go install github.com/moond4rk/keychainbreaker/cmd/keychainbreaker@latest
-```
-
-**Binary**
-
-Download from [GitHub Releases](https://github.com/moonD4rk/keychainbreaker/releases).
-
-### Usage
-
-```
-$ keychainbreaker -h
-Usage:
-  keychainbreaker [command]
-
-Available Commands:
-  completion  Generate the autocompletion script for the specified shell
-  dump        Export all keychain records to JSON
-  hash        Print the keychain password hash for offline cracking
-  help        Help about any command
-  version     Print version information
-
-Flags:
-  -h, --help      help for keychainbreaker
-  -v, --verbose   print diagnostics to stderr
-```
-
-Every command reads `~/Library/Keychains/login.keychain-db` unless `-f/--file` names another keychain. Progress and warnings go to stderr, so stdout carries only the requested data.
+Binaries are on [GitHub Releases](https://github.com/moonD4rk/keychainbreaker/releases). Every command reads `~/Library/Keychains/login.keychain-db` unless `-f` names another file, and `-v` prints diagnostics to stderr.
 
 ### dump
 
-Export generic and internet passwords, private keys and certificates to JSON. Each password appears three ways (`password`, `hex_password`, `base64_password`) because a secret need not be valid text; key and certificate data appear as hex and base64.
+Exports every record to JSON. Each password appears as `password`, `hex_password` and `base64_password`, since a secret need not be valid text.
 
 ```
+    --entropy string    entropy file for a macOS 26.4+ login keychain (default: auto from /var/db/SystemKeys)
 -f, --file string       keychain file (default ~/Library/Keychains/login.keychain-db)
 -k, --key string        hex-encoded 24-byte master key, used instead of the password
 -o, --output string     output file, or "-" for stdout (default "keychain_dump.json")
@@ -68,63 +30,39 @@ Export generic and internet passwords, private keys and certificates to JSON. Ea
     --password-stdin    read the keychain password from stdin
 ```
 
-```
-$ keychainbreaker dump
-Keychain: /Users/user/Library/Keychains/login.keychain-db
-Enter keychain password:
-Extracted:
-  Generic passwords:  42
-  Internet passwords: 15
-  Private keys:       2
-  Certificates:       8
-Output: keychain_dump.json
-```
-
 ```bash
-# Read the password from stdin instead of the prompt
-keychainbreaker dump -f /path/to/login.keychain-db --password-stdin < password.txt
-
-# Unlock with a recovered master key and pipe the JSON
+keychainbreaker dump                                                    # prompts for the password
+keychainbreaker dump -f login.keychain-db --password-stdin < password.txt
 keychainbreaker dump --key <48-char-hex> -o - | jq '.generic_passwords[].service'
-
-# Wrong password: still exports metadata (service, account, timestamps, certificates)
-keychainbreaker dump -p "wrong"
+sudo keychainbreaker dump                                               # macOS 26.4+, see below
 ```
 
-The output file is created with mode `0600` and replaced in one step, so the secrets are never readable by other users and an interrupted run leaves the previous file intact.
+A wrong password still exports the metadata of every record. The output file is created with mode `0600` and replaced in one step; under `sudo` it is handed back to the invoking user.
 
 ### hash
 
 ```bash
-# Export the hash for offline cracking (no password needed)
-keychainbreaker hash
-# $keychain$*<salt_hex>*<iv_hex>*<ciphertext_hex>
+keychainbreaker hash # $keychain$*<salt>*<iv>*<ciphertext>, for hashcat (mode 23100) and John the Ripper
 ```
 
-The format is accepted by hashcat (mode 23100) and John the Ripper.
+No password is needed, but the hash of an entropy-protected macOS 26.4+ login keychain cannot be cracked.
 
-## Go Library
-
-### Install
+## Library
 
 ```bash
-go get github.com/moond4rk/keychainbreaker
+go get github.com/moond4rk/keychainbreaker # Go 1.20+, standard library only
 ```
-
-Requires Go 1.20+. The library depends on nothing outside the standard library.
-
-### Quick Start
 
 ```go
 path, err := keychainbreaker.DefaultKeychainPath() // ~/Library/Keychains/login.keychain-db
 if err != nil {
     return err
 }
-kc, err := keychainbreaker.Open(path)
+kc, err := keychainbreaker.Open(path) // or OpenBytes(buf); add WithLogger(l) for diagnostics
 if err != nil {
     return err
 }
-if err := kc.UnlockWithPassword("your-macos-login-password"); err != nil {
+if err := kc.UnlockWithPassword("macos-login-password"); err != nil {
     return err
 }
 passwords, err := kc.GenericPasswords()
@@ -136,200 +74,71 @@ for _, p := range passwords {
 }
 ```
 
-### Open
-
-```go
-kc, err := keychainbreaker.Open("/path/to/login.keychain-db")             // a file
-kc, err := keychainbreaker.OpenBytes(buf)                                // a keychain already in memory; buf is copied
-kc, err := keychainbreaker.Open(path, keychainbreaker.WithLogger(logger)) // diagnostics, e.g. to a *slog.Logger
-```
-
 ### Unlock
 
 ```go
-err := kc.UnlockWithPassword("macos-login-password") // derives the master key with PBKDF2-HMAC-SHA1
-err := kc.UnlockWithKey(masterKey)                   // the 24-byte master key itself
+err := kc.UnlockWithPassword(password)         // PBKDF2-HMAC-SHA1 of the password
+err := kc.UnlockWithEntropy(password, entropy) // macOS 26.4+: the password plus the keychain's entropy file
+err := kc.UnlockWithKey(masterKey)             // the 24-byte master key itself
 ```
 
-Both return `ErrWrongKey` for a wrong credential. A failed attempt leaves the keychain as it was, so another credential can be tried; `kc.Unlocked()` reports whether one succeeded.
+Each returns `ErrWrongKey` for a wrong credential and leaves the keychain as it was, so another one can be tried.
 
-> **macOS 26.4+ (login keychain v2):** freshly re-keyed login keychains report blob version `0x200`. Offline password unlock no longer works for them: `UnlockWithPassword` returns `ErrUnsupportedBlobVersion` instead of a misleading "wrong password" error. Recover the 24-byte master key on the originating machine and use `UnlockWithKey`. Version 1 (`0x100`) keychains are unaffected.
+### Read
 
-### Recover the master key on macOS 26.4+ (v2)
+```go
+generic, err := kc.GenericPasswords()   // application passwords
+internet, err := kc.InternetPasswords() // website, server and file share passwords
+keys, err := kc.PrivateKeys()           // PKCS#8 private keys
+certs, err := kc.Certificates()         // DER-encoded X.509 certificates
+hash, err := kc.PasswordHash()          // needs no unlock
+```
 
-A v2 keychain can't be decrypted offline from the file and password alone, but its 24-byte master key can be captured on the **machine that created it** and then replayed offline with `UnlockWithKey` / `--key`. `securityd` still derives that key through `CSSM_DeriveKey`, so an lldb breakpoint on the running daemon exposes it.
+Records carry their metadata even while the keychain is locked; passwords and private key data stay nil until an unlock succeeds. A `Keychain` is safe for concurrent use. The record types are documented on [pkg.go.dev](https://pkg.go.dev/github.com/moond4rk/keychainbreaker).
 
-Requirements: macOS 26.4+ on **Apple Silicon**, an admin account, the login password, and [SIP temporarily disabled](https://developer.apple.com/documentation/security/disabling-and-enabling-system-integrity-protection) (re-enable it as soon as you're done).
+## macOS 26.4 and Later
 
-**1. Lock the keychain** so the next unlock re-derives the key:
+Since macOS 26.4 a login keychain can also be protected by an entropy file, so the password alone no longer unlocks it. Each keychain has its own file, `/var/db/SystemKeys/<SALT>`, named by its salt in uppercase hex (`security show-keychain-info -s` prints it). The file holds 32 random bytes, and the master key becomes `PBKDF2(HMAC-SHA256(entropy, password), salt)`.
+
+The directory is readable only by root, and only while [SIP is disabled](https://developer.apple.com/documentation/security/disabling-and-enabling-system-integrity-protection). Copy the file along with the keychain: Apple's [TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains) warns that a backup without it may be useless, and that its name, location and format are not an API.
 
 ```bash
-security lock-keychain ~/Library/Keychains/login.keychain-db
-```
-
-**2. Attach lldb to `securityd`** and break on the deriver. Attaching to the root-owned daemon needs `sudo`; if `pgrep` returns more than one PID (e.g. with the iOS Simulator installed), pick the one from your login session:
-
-```bash
-sudo lldb -p "$(pgrep -x securityd)"
-```
-
-```
-(lldb) expression -l objective-c -- @import Security
-(lldb) breakpoint set -n CSSM_DeriveKey
-(lldb) continue
-```
-
-**3. Trigger a derive** from another shell (enter your login password when prompted):
-
-```bash
-security unlock-keychain ~/Library/Keychains/login.keychain-db
-```
-
-**4. Read the master key.** When the breakpoint hits, `$x6` holds the `DerivedKey` output pointer; step out so it gets filled in, then read 24 bytes of its `KeyData`:
-
-```
-(lldb) expr void *$derived = (void *)$x6
-(lldb) thread step-out
-(lldb) p *(CSSM_KEY *)$derived
-(lldb) memory read --format x --size 1 --count 24 `((CSSM_KEY *)$derived)->KeyData.Data`
-```
-
-The `p` line is a sanity check: expect `HeaderVersion = 2`, `KeyData.Length = 24`, and `BlobType = 0` -- any other `BlobType` means you captured the wrong key. Concatenate the 24 printed bytes into a 48-character hex string.
-
-**5. Replay it offline** (re-enable SIP first):
-
-```bash
-keychainbreaker dump --key=<48-char-hex>
+sudo keychainbreaker dump                          # tries the password alone, then reads the entropy file
+sudo cat /var/db/SystemKeys/<SALT> > entropy.plist # or copy the file out once...
+keychainbreaker dump --entropy entropy.plist       # ...and run unprivileged
 ```
 
 ```go
-key, err := hex.DecodeString("<48-char-hex>")
+data, err := os.ReadFile(kc.EntropyPath()) // /var/db/SystemKeys/<SALT>; needs root and SIP off
 if err != nil {
     return err
 }
-err = kc.UnlockWithKey(key)
-```
-
-The master key is stable per machine + password + keychain, so one capture is reusable. A worked demo with sample output is in [issue #18](https://github.com/moonD4rk/keychainbreaker/issues/18), where this method was contributed by [@gmazzola](https://github.com/gmazzola).
-
-### Read Records
-
-```go
-genericPasswords, err := kc.GenericPasswords()   // application passwords
-internetPasswords, err := kc.InternetPasswords() // website, server and file share passwords
-privateKeys, err := kc.PrivateKeys()             // PKCS#8 private keys
-certificates, err := kc.Certificates()           // DER-encoded X.509 certificates
-hash, err := kc.PasswordHash()                   // for hashcat and John the Ripper; needs no unlock
-```
-
-Records do not wait for an unlock: every record carries its metadata (service, account, timestamps and so on) from the start, and only the secrets, passwords and private key data, stay nil until an unlock succeeds or when a record cannot be decrypted. An empty password is an empty, non-nil slice. Certificates are not encrypted, so they are always complete. A `Keychain` is safe for concurrent use.
-
-#### Record Types
-
-<details>
-<summary>GenericPassword</summary>
-
-```go
-type GenericPassword struct {
-    Service     string
-    Account     string
-    Password    []byte // nil while locked or when the record cannot be decrypted
-    Description string
-    Comment     string
-    Creator     string // four-character code
-    Type        string // four-character code
-    PrintName   string
-    Alias       string
-    Created     time.Time
-    Modified    time.Time
+entropy, err := keychainbreaker.DecodeEntropy(data)
+if err != nil {
+    return err
 }
+err = kc.UnlockWithEntropy(password, entropy)
 ```
 
-</details>
-
-<details>
-<summary>InternetPassword</summary>
-
-```go
-type InternetPassword struct {
-    Server         string
-    Account        string
-    Password       []byte // nil while locked or when the record cannot be decrypted
-    SecurityDomain string
-    Protocol       string // four-character code, such as "htps" or "smb "
-    AuthType       string // four-character code, such as "dflt"
-    Port           uint32
-    Path           string
-    Description    string
-    Comment        string
-    Creator        string
-    Type           string
-    PrintName      string
-    Alias          string
-    Created        time.Time
-    Modified       time.Time
-}
-```
-
-</details>
-
-<details>
-<summary>PrivateKey</summary>
-
-```go
-type PrivateKey struct {
-    Data      []byte // PKCS#8; nil while locked or when the record cannot be decrypted
-    PrintName string
-    Label     []byte // usually the SHA-1 hash of the public key
-    KeyClass  uint32
-    KeyType   uint32
-    KeySize   uint32 // in bits
-}
-```
-
-</details>
-
-<details>
-<summary>Certificate</summary>
-
-```go
-type Certificate struct {
-    Data      []byte // DER-encoded certificate
-    Type      uint32
-    Encoding  uint32
-    PrintName string
-    Subject   []byte // DER-encoded subject name
-    Issuer    []byte // DER-encoded issuer name
-    Serial    []byte
-}
-```
-
-</details>
+A master key captured from `securityd` ([lldb steps](https://github.com/moonD4rk/keychainbreaker/issues/18#issuecomment-4940156777)) also works, through `--key` or `UnlockWithKey`, without the password or the entropy file. The keychain's blob version, `0x200`, is unrelated: it marks partition support and dates to OS X 10.11.4.
 
 ## How It Works
-
-macOS Keychain uses a three-layer encryption scheme:
 
 ```
 Password --> PBKDF2 --> Master Key --> DB Key --> Per-Record Keys --> Plaintext
 ```
 
-1. **Master key** derived from password via PBKDF2-HMAC-SHA1
-2. **Database key** decrypted from the keychain's metadata blob
-3. **Per-record keys** unwrapped using RFC 3217 Triple-DES Key Wrap
-4. **Passwords/keys** decrypted using per-record keys with 3DES-CBC
+1. **Master key**: PBKDF2-HMAC-SHA1 of the password, or on macOS 26.4+ of `HMAC-SHA256(entropy, password)`
+2. **Database key**: decrypted from the keychain's metadata blob with the master key
+3. **Record keys**: unwrapped with the database key (RFC 3217 Triple-DES key wrap), as are private keys
+4. **Passwords**: decrypted with their record keys, 3DES-CBC
 
-The library dynamically discovers table schemas from the keychain file itself, making it robust across macOS versions (10.6 through 26).
-
-See [RFC 001](rfcs/001-keychain-encryption.md) for the full encryption specification.
+Table schemas are read from the file itself rather than hard-coded. [RFC 001](rfcs/001-keychain-encryption.md) describes the format in full.
 
 ## Compatibility
 
-| Supported                             | Not Supported                     |
-| ------------------------------------- | --------------------------------- |
-| `.keychain` and `.keychain-db` files  | `keychain-2.db` (iCloud Keychain) |
-| OS X 10.6 through macOS 26 (Tahoe)    | Secure Enclave protected keys     |
-| Linux, macOS, Windows (cross-compile) |                                   |
+- Supported: `.keychain` and `.keychain-db` files from OS X 10.6 through macOS 27
+- Not supported: `keychain-2.db` (iCloud Keychain) and Secure Enclave protected keys
 
 ## License
 

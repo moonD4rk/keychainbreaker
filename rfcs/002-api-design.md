@@ -1,9 +1,6 @@
 # RFC 002: Go API Design
 
-Status: Implemented
-Author: @moonD4rk
-Date: 2026-03-27
-Updated: 2026-11-26
+Status: Implemented Author: @moonD4rk Date: 2026-03-27 Updated: 2026-11-26
 
 ## Summary
 
@@ -12,7 +9,7 @@ The public API and internal architecture of the keychainbreaker Go library, whic
 Design principles:
 
 - **Open and unlock are separate.** Parsing needs no credential; metadata, certificates and the password hash are available before any unlock.
-- **Explicit calls over options.** Each input has its own function (`Open`, `OpenBytes`, `UnlockWithPassword`, `UnlockWithKey`); options are left for settings that combine, such as a logger.
+- **Explicit calls over options.** Each input has its own function (`Open`, `OpenBytes`, `UnlockWithPassword`, `UnlockWithEntropy`, `UnlockWithKey`); options are left for settings that combine, such as a logger.
 - **Raw data out.** Records carry bytes and plain values; encoding them (text, hex, base64, JSON) is the caller's business.
 - **Self-describing records.** Attributes are read by name and decoded by the format the file's own schema declares.
 - **One package, standard library only, Go 1.20.** HackBrowserData and other consumers build it with Go 1.20.
@@ -42,17 +39,29 @@ There is no implicit default: an empty path or buffer is an error, never a silen
 ### Unlock
 
 ```go
-// UnlockWithPassword derives the master key with PBKDF2-HMAC-SHA1 (blob version 0x100 only).
+// UnlockWithPassword derives the master key from the password with PBKDF2-HMAC-SHA1.
 func (kc *Keychain) UnlockWithPassword(password string) error
 
-// UnlockWithKey takes the 24-byte master key; it works for every blob version.
+// UnlockWithEntropy folds the keychain's entropy file into the password: macOS 26.4 and later derive the master key
+// from HMAC-SHA256(entropy, password).
+func (kc *Keychain) UnlockWithEntropy(password string, entropy []byte) error
+
+// UnlockWithKey takes the 24-byte master key itself.
 func (kc *Keychain) UnlockWithKey(key []byte) error
 
 // Unlocked reports whether an unlock has succeeded.
 func (kc *Keychain) Unlocked() bool
+
+// EntropyPath returns /var/db/SystemKeys/<SALT>, the entropy file's conventional location.
+func (kc *Keychain) EntropyPath() string
+
+// DecodeEntropy reads the raw secret from an entropy file's XML-plist contents.
+func DecodeEntropy(plist []byte) ([]byte, error)
 ```
 
-A wrong credential returns `ErrWrongKey`; a password on a version 0x200 keychain returns `ErrUnsupportedBlobVersion`. A failed attempt changes nothing, so the caller can try another credential, and a failed attempt after a successful one keeps the keychain unlocked. A key of the wrong length is a caller error, not `ErrWrongKey`.
+A wrong credential returns `ErrWrongKey`. A failed attempt changes nothing, so the caller can try another credential, and a failed attempt after a successful one keeps the keychain unlocked. A key of the wrong length is a caller error, not `ErrWrongKey`.
+
+Since macOS 26.4 (Tahoe) the login keychain is protected by its own 32-byte entropy file at `/var/db/SystemKeys/<salt>`, so the password alone no longer derives the master key; `UnlockWithPassword` returns `ErrWrongKey` and the caller must use `UnlockWithEntropy`. The blob version is unrelated: `0x200` means partition support and dates to OS X 10.11.4. The file format is not a stable API (Apple TN3137), so the library isolates it in `DecodeEntropy` and leaves reading the root-only, SIP-protected directory to the caller.
 
 ### Records
 
@@ -131,8 +140,7 @@ The types have no JSON tags and no pre-encoded copies of their bytes. The CLI de
 var (
     ErrInvalidSignature       // Open, OpenBytes: not a keychain
     ErrParseFailed            // malformed structure
-    ErrWrongKey               // UnlockWithPassword, UnlockWithKey: the credential does not decrypt the keychain
-    ErrUnsupportedBlobVersion // UnlockWithPassword, PasswordHash: blob version other than 0x100
+    ErrWrongKey               // UnlockWithPassword, UnlockWithEntropy, UnlockWithKey: the credential does not decrypt the keychain
 )
 ```
 
@@ -140,15 +148,16 @@ Every error wraps one of these where it applies, so callers use `errors.Is`. The
 
 ## 4. Internal Architecture
 
-| File          | Holds                                                                                     |
-| ------------- | ----------------------------------------------------------------------------------------- |
-| `keychain.go` | `Keychain`, `Open`, `OpenBytes`, `DefaultKeychainPath`, parsing order, `PasswordHash`     |
-| `records.go`  | the four extraction methods and per-record decryption                                     |
-| `unlock.go`   | `UnlockWithPassword`, `UnlockWithKey`, database key and record key recovery               |
-| `decrypt.go`  | 3DES-CBC, RFC 3217 key unwrapping, PBKDF2                                                 |
-| `parse.go`    | binary structures, all read through one bounds-checked `span` helper                      |
-| `schema.go`   | schema discovery and attribute decoding by format                                         |
-| `types.go`, `errors.go`, `logger.go` | the exported types, errors and logger interface                    |
+| File | Holds |
+| --- | --- |
+| `keychain.go` | `Keychain`, `Open`, `OpenBytes`, `DefaultKeychainPath`, parsing order, `PasswordHash` |
+| `records.go` | the four extraction methods and per-record decryption |
+| `unlock.go` | `UnlockWithPassword`, `UnlockWithEntropy`, `UnlockWithKey`, database key and record key recovery |
+| `entropy.go` | `EntropyPath`, `DecodeEntropy`, and the HMAC-SHA256 entropy-password mixing |
+| `decrypt.go` | 3DES-CBC, RFC 3217 key unwrapping, PBKDF2 |
+| `parse.go` | binary structures, all read through one bounds-checked `span` helper |
+| `schema.go` | schema discovery and attribute decoding by format |
+| `types.go`, `errors.go`, `logger.go` | the exported types, errors and logger interface |
 
 ### Parsing
 
@@ -166,7 +175,7 @@ Attributes are read by name through the table's schema and decoded by the declar
 
 Unlocking:
 
-1. Take the master key, or derive it with `PBKDF2(password, salt, 1000, 24, SHA-1)`.
+1. Take the master key, or derive it with `PBKDF2(passphrase, salt, 1000, 24, SHA-1)`, where the passphrase is the password or, on macOS 26.4 and later, `HMAC-SHA256(entropy, password)`.
 2. Decrypt the database key from the database blob with 3DES-CBC.
 3. Unwrap each SymmetricKey record (RFC 3217) and index the keys by the SSGP label they serve.
 4. Store the database key and the record keys only if all of this succeeds.
@@ -182,19 +191,19 @@ Reading a password record: parse its blob as SSGP, look up the record key by lab
 - Password: `keychainbreaker-test`
 - Master key: `4557eb716bbf20200945109cf3b884af9aca72e890e47c07`, PBKDF2 of the password
 
-| Type             | Service or server | Account | Secret        | Notes                                                       |
-| ---------------- | ----------------- | ------- | ------------- | ----------------------------------------------------------- |
-| GenericPassword  | moond4rk.com      | admin   | password#123  | description, comment, creator `mD4k`, type `note`           |
-| GenericPassword  | HackBrowserData   | admin   | password#123  | minimal                                                     |
-| InternetPassword | moond4rk.com:443  | admin   | password#123  | protocol `htps`, auth type `dflt`, path `/login`, all fields |
-| InternetPassword | moond4rk.com:445  | admin   | password#123  | protocol `smb `, minimal                                    |
-| PrivateKey       | 93B7C5C0          | -       | RSA 2048-bit  | 20-byte label                                               |
-| X509Certificate  | keychainbreaker-test | -    | self-signed   | -                                                           |
+| Type | Service or server | Account | Secret | Notes |
+| --- | --- | --- | --- | --- |
+| GenericPassword | moond4rk.com | admin | password#123 | description, comment, creator `mD4k`, type `note` |
+| GenericPassword | HackBrowserData | admin | password#123 | minimal |
+| InternetPassword | moond4rk.com:443 | admin | password#123 | protocol `htps`, auth type `dflt`, path `/login`, all fields |
+| InternetPassword | moond4rk.com:445 | admin | password#123 | protocol `smb `, minimal |
+| PrivateKey | 93B7C5C0 | - | RSA 2048-bit | 20-byte label |
+| X509Certificate | keychainbreaker-test | - | self-signed | - |
 
 ### Coverage
 
 - **End to end:** every record type against the fixture, field by field, unlocked by password and by key; metadata from a locked keychain.
-- **Unlock semantics:** wrong credentials, retry after a failure, a failure after a success, key length, version 0x200 gating.
+- **Unlock semantics:** wrong credentials, retry after a failure, a failure after a success, key length, the entropy derivation (a known-answer test) and entropy-plist decoding.
 - **Parsing:** the bounds helper, each binary structure, truncated and oversized inputs, including a table count that once triggered a 64 MiB allocation.
 - **Schema:** the discovered formats, and attribute decoding by format.
 - **Concurrency:** parallel opening, unlocking and extraction under `-race`.

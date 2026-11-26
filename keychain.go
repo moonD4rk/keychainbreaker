@@ -11,8 +11,8 @@ import (
 )
 
 // Keychain is a parsed keychain file. It starts locked: record metadata, certificates and PasswordHash are available
-// at once, passwords and private keys after UnlockWithPassword or UnlockWithKey. A Keychain is safe for concurrent
-// use.
+// at once, passwords and private keys after UnlockWithPassword, UnlockWithEntropy or UnlockWithKey. A Keychain is
+// safe for concurrent use.
 type Keychain struct {
 	buf          []byte
 	tables       map[uint32]*table
@@ -148,13 +148,11 @@ func (kc *Keychain) encryptedDBKey() ([]byte, error) {
 }
 
 // PasswordHash returns the keychain password hash for offline cracking, as $keychain$*<salt>*<iv>*<ciphertext> in
-// hex, the form hashcat (mode 23100) and John the Ripper accept. It needs no unlock and supports only version 0x100
-// keychains.
+// hex, the form hashcat (mode 23100) and John the Ripper accept. It needs no unlock.
+//
+// The hash is crackable only for keychains whose master key derives from the password alone. On macOS 26.4 and later
+// the login keychain also mixes in its entropy file (see EntropyPath), so no password recovers this hash.
 func (kc *Keychain) PasswordHash() (string, error) {
-	if kc.dbBlob.version != blobVersionV1 {
-		return "", fmt.Errorf("%w: blob version 0x%08X; offline cracking supports only 0x%08X",
-			ErrUnsupportedBlobVersion, kc.dbBlob.version, blobVersionV1)
-	}
 	encrypted, err := kc.encryptedDBKey()
 	if err != nil {
 		return "", err

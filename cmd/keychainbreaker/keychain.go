@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -50,6 +51,7 @@ type credentials struct {
 	password      string
 	passwordStdin bool
 	key           string
+	entropy       string
 }
 
 func (c *credentials) addFlags(cmd *cobra.Command) {
@@ -58,32 +60,76 @@ func (c *credentials) addFlags(cmd *cobra.Command) {
 		"keychain password; other local users can see it, prefer --password-stdin or the prompt")
 	flags.BoolVar(&c.passwordStdin, "password-stdin", false, "read the keychain password from stdin")
 	flags.StringVarP(&c.key, "key", "k", "", "hex-encoded 24-byte master key, used instead of the password")
+	flags.StringVar(&c.entropy, "entropy", "",
+		"entropy file for a macOS 26.4+ login keychain (default: auto from /var/db/SystemKeys)")
 	cmd.MarkFlagsMutuallyExclusive("password", "password-stdin", "key")
+	cmd.MarkFlagsMutuallyExclusive("key", "entropy")
 }
 
 func (c *credentials) unlock(cmd *cobra.Command, kc *keychainbreaker.Keychain) error {
-	switch {
-	case cmd.Flags().Changed("key"):
+	if cmd.Flags().Changed("key") {
 		key, err := hex.DecodeString(strings.TrimPrefix(strings.TrimSpace(c.key), "0x"))
 		if err != nil {
 			return fmt.Errorf("decode --key: %w", err)
 		}
 		return kc.UnlockWithKey(key)
-	case cmd.Flags().Changed("password"):
-		return kc.UnlockWithPassword(c.password)
-	case c.passwordStdin:
-		password, err := readPassword(cmd.InOrStdin())
-		if err != nil {
-			return err
-		}
-		return kc.UnlockWithPassword(password)
-	default:
-		password, err := promptPassword(cmd)
-		if err != nil {
-			return err
-		}
-		return kc.UnlockWithPassword(password)
 	}
+	password, err := c.readPassword(cmd)
+	if err != nil {
+		return err
+	}
+	return c.unlockWithPassword(kc, password)
+}
+
+func (c *credentials) readPassword(cmd *cobra.Command) (string, error) {
+	switch {
+	case cmd.Flags().Changed("password"):
+		return c.password, nil
+	case c.passwordStdin:
+		return readPassword(cmd.InOrStdin())
+	default:
+		return promptPassword(cmd)
+	}
+}
+
+// unlockWithPassword tries the password alone, then folds in the entropy file that macOS 26.4 and later require. An
+// explicit --entropy is used directly; otherwise the file is read from its conventional path only after the password
+// alone fails, so pre-26.4 keychains never touch the filesystem.
+func (c *credentials) unlockWithPassword(kc *keychainbreaker.Keychain, password string) error {
+	if c.entropy != "" {
+		entropy, err := readEntropyFile(c.entropy)
+		if err != nil {
+			return err
+		}
+		return kc.UnlockWithEntropy(password, entropy)
+	}
+	err := kc.UnlockWithPassword(password)
+	if err == nil || !errors.Is(err, keychainbreaker.ErrWrongKey) {
+		return err
+	}
+	entropy, readErr := readEntropyFile(kc.EntropyPath())
+	switch {
+	case readErr == nil:
+		return kc.UnlockWithEntropy(password, entropy)
+	case errors.Is(readErr, fs.ErrNotExist):
+		return err
+	default:
+		// Unless root with SIP off, every SystemKeys lookup fails, so a wrong password looks like an unreadable file.
+		return fmt.Errorf("%w; if the password is right, this may be a macOS 26.4+ login keychain whose entropy file "+
+			"could not be read (%v): run as root with SIP disabled, or pass --entropy", err, readErr)
+	}
+}
+
+func readEntropyFile(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	entropy, err := keychainbreaker.DecodeEntropy(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return entropy, nil
 }
 
 // unlock leaves the keychain locked rather than failing on a wrong or unusable credential, so metadata still exports.
@@ -91,10 +137,6 @@ func unlock(cmd *cobra.Command, kc *keychainbreaker.Keychain, creds *credentials
 	err := creds.unlock(cmd, kc)
 	switch {
 	case err == nil:
-		return nil
-	case errors.Is(err, keychainbreaker.ErrUnsupportedBlobVersion):
-		fmt.Fprintf(cmd.ErrOrStderr(),
-			"Warning: %v; exporting metadata only (recover the master key on the originating Mac and pass --key)\n", err)
 		return nil
 	case errors.Is(err, keychainbreaker.ErrWrongKey):
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v; exporting metadata only\n", err)

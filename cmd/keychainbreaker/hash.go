@@ -12,7 +12,10 @@ func newHashCmd(root *rootOptions) *cobra.Command {
 		Use:   "hash",
 		Short: "Print the keychain password hash for offline cracking",
 		Long: `Print the keychain password hash in the format hashcat (mode 23100) and
-John the Ripper accept. No password is needed.`,
+John the Ripper accept. No password is needed.
+
+The hash cannot be cracked for a macOS 26.4+ login keychain, whose master
+key also depends on its entropy file; use dump --entropy or dump --key.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			kc, err := openKeychain(cmd, root, file)

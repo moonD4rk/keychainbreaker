@@ -94,10 +94,11 @@ func unwrapPrivateKey(encryptedBlob, iv, dbKey []byte) ([]byte, error) {
 	return finalPlain, nil
 }
 
-// deriveMasterKey derives the 24-byte master key from the password with PBKDF2-HMAC-SHA1 and the database blob's
-// salt.
-func deriveMasterKey(password string, salt []byte) []byte {
-	return pbkdf2Key([]byte(password), salt, pbkdf2Iterations, tripleDESKeyLen, sha1.New)
+// deriveMasterKey derives the 24-byte master key from a passphrase with PBKDF2-HMAC-SHA1 and the database blob's
+// salt. The passphrase is the login password, or HMAC-SHA256(entropy, password) on macOS 26.4 and later; see
+// mixEntropy.
+func deriveMasterKey(passphrase, salt []byte) []byte {
+	return pbkdf2Key(passphrase, salt, pbkdf2Iterations, tripleDESKeyLen, sha1.New)
 }
 
 // pbkdf2Key is golang.org/x/crypto/pbkdf2.Key: crypto/pbkdf2 needs Go 1.24, and the library has no dependencies.

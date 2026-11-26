@@ -47,13 +47,6 @@ const (
 	tableMetadata            uint32 = 0x80008000
 )
 
-// Database blob versions. Version 0x100 derives the master key from the password with PBKDF2 and can be decrypted
-// offline; version 0x200, introduced in macOS 26.4, cannot be decrypted from the file and the password alone.
-const (
-	blobVersionV1 uint32 = 0x00000100
-	blobVersionV2 uint32 = 0x00000200
-)
-
 // span returns buf[off:off+n] when that range lies within buf, without overflowing on hostile offsets.
 func span(buf []byte, off, n int) ([]byte, bool) {
 	if off < 0 || n < 0 || off > len(buf) || n > len(buf)-off {

@@ -7,18 +7,30 @@ import (
 )
 
 // UnlockWithPassword unlocks the keychain with its password, from which PBKDF2-HMAC-SHA1 derives the master key.
-// It returns ErrWrongKey for a wrong password and ErrUnsupportedBlobVersion for keychains that only UnlockWithKey can
-// open. A failed attempt leaves the keychain as it was, so another credential can be tried.
+// It returns ErrWrongKey for a wrong password. A failed attempt leaves the keychain as it was, so another credential
+// can be tried.
+//
+// macOS 26.4 and later also protect the login keychain with an entropy file of its own, so the password alone no
+// longer derives the master key and this returns ErrWrongKey. Use UnlockWithEntropy for those keychains; EntropyPath
+// locates the file.
 func (kc *Keychain) UnlockWithPassword(password string) error {
-	if kc.dbBlob.version != blobVersionV1 {
-		return fmt.Errorf("%w: blob version 0x%08X; a password derives the master key only for 0x%08X, use UnlockWithKey",
-			ErrUnsupportedBlobVersion, kc.dbBlob.version, blobVersionV1)
-	}
-	return kc.unlock(deriveMasterKey(password, kc.dbBlob.salt))
+	return kc.unlock(deriveMasterKey([]byte(password), kc.dbBlob.salt))
 }
 
-// UnlockWithKey unlocks the keychain with its 24-byte master key, which works for every blob version. It returns
-// ErrWrongKey for a wrong key. A failed attempt leaves the keychain as it was, so another key can be tried.
+// UnlockWithEntropy unlocks a login keychain that macOS 26.4 and later protect with its own entropy file in
+// addition to the password. The master key is derived from HMAC-SHA256(entropy, password) rather than the password
+// alone. entropy is the raw secret stored at EntropyPath; DecodeEntropy reads it from that file's contents. It
+// returns ErrWrongKey for a wrong password or entropy. A failed attempt leaves the keychain as it was.
+func (kc *Keychain) UnlockWithEntropy(password string, entropy []byte) error {
+	if len(entropy) == 0 {
+		return errors.New("keychainbreaker: entropy is empty")
+	}
+	return kc.unlock(deriveMasterKey(mixEntropy(entropy, []byte(password)), kc.dbBlob.salt))
+}
+
+// UnlockWithKey unlocks the keychain with its 24-byte master key, which needs neither the password nor an entropy
+// file. It returns ErrWrongKey for a wrong key. A failed attempt leaves the keychain as it was, so another key can be
+// tried.
 func (kc *Keychain) UnlockWithKey(key []byte) error {
 	if len(key) != tripleDESKeyLen {
 		return fmt.Errorf("keychainbreaker: master key is %d bytes, want %d", len(key), tripleDESKeyLen)

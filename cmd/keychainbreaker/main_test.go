@@ -120,6 +120,50 @@ func TestDumpWithWrongPasswordExportsMetadata(t *testing.T) {
 	}
 }
 
+// The fixture is not entropy-protected, so an entropy file cannot unlock it: the run falls back to a metadata-only
+// export, which proves --entropy is wired through to UnlockWithEntropy.
+func TestDumpWithEntropyFileExportsMetadata(t *testing.T) {
+	entropyFile := filepath.Join(t.TempDir(), "entropy.plist")
+	plist := "<plist version=\"1.0\"><data>" +
+		strings.Repeat("AAAA", 8) + "</data></plist>" // 32 zero bytes
+	require.NoError(t, os.WriteFile(entropyFile, []byte(plist), 0o600))
+
+	res := run(t, "", "dump", "-f", fixture, "-p", fixturePassword, "--entropy", entropyFile, "-o", "-")
+	require.NoError(t, res.err)
+	assert.Contains(t, res.stderr, "Generic passwords:  2 (metadata only)")
+
+	d := decodeDump(t, []byte(res.stdout))
+	for _, p := range d.GenericPasswords {
+		assert.Empty(t, p.Password, p.Service)
+	}
+}
+
+func TestDumpRejectsUnreadableEntropyFile(t *testing.T) {
+	res := run(t, "", "dump", "-f", fixture, "-p", fixturePassword,
+		"--entropy", filepath.Join(t.TempDir(), "missing"), "-o", "-")
+	require.Error(t, res.err)
+	assert.Empty(t, res.stdout)
+}
+
+func TestDumpRejectsEntropyWithKey(t *testing.T) {
+	res := run(t, "", "dump", "-f", fixture, "-k", fixtureKey, "--entropy", "x", "-o", "-")
+	require.Error(t, res.err)
+	assert.Contains(t, res.err.Error(), "none of the others can be")
+}
+
+// Under "sudo -u other" SUDO_UID names the invoking user, but only root may hand a file to someone else.
+func TestChownToSudoUserNoopUnlessRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root")
+	}
+	f, err := os.CreateTemp(t.TempDir(), "dump")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = f.Close() })
+	t.Setenv("SUDO_UID", "0")
+	t.Setenv("SUDO_GID", "0")
+	require.NoError(t, chownToSudoUser(f))
+}
+
 func TestDumpRejectsMalformedKeys(t *testing.T) {
 	tests := map[string]string{
 		"not hex":              "decode --key",
