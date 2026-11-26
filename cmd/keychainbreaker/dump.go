@@ -64,24 +64,21 @@ func runDump(cmd *cobra.Command, root *rootOptions, opts *dumpOptions) error {
 	if opts.output == stdoutPath {
 		_, err = cmd.OutOrStdout().Write(data)
 	} else {
-		err = writePrivateFile(opts.output, data)
+		err = writePrivateFile(opts.output, data, cmd.ErrOrStderr())
 	}
 	if err != nil {
 		return fmt.Errorf("write output: %w", err)
-	}
-	if opts.output != stdoutPath {
-		if err := chownToSudoUser(opts.output); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not restore ownership of %s: %v\n", opts.output, err)
-		}
 	}
 	printSummary(cmd.ErrOrStderr(), records, kc.Unlocked(), opts.output)
 	return nil
 }
 
-// chownToSudoUser hands path back to the user who invoked sudo, so a dump written while running as root is not left
-// owned by root. It is a no-op when not running under sudo (SUDO_UID or SUDO_GID unset), which also covers every
-// non-Unix host, where sudo sets neither.
-func chownToSudoUser(path string) error {
+// chownToSudoUser hands f to the user who invoked sudo, so a dump written as root is not left owned by root. It does
+// nothing unless the process runs as root under sudo; os.Geteuid is -1 on Windows.
+func chownToSudoUser(f *os.File) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
 	uid, err := strconv.Atoi(os.Getenv("SUDO_UID"))
 	if err != nil {
 		return nil
@@ -90,7 +87,7 @@ func chownToSudoUser(path string) error {
 	if err != nil {
 		return nil
 	}
-	return os.Chown(path, uid, gid)
+	return f.Chown(uid, gid)
 }
 
 func collect(kc *keychainbreaker.Keychain) (*dump, error) {
@@ -119,12 +116,18 @@ func collect(kc *keychainbreaker.Keychain) (*dump, error) {
 }
 
 // writePrivateFile renames a 0600 temp file into place: the secrets are never readable by others or half-written.
-func writePrivateFile(path string, data []byte) error {
+// Under sudo the temp file goes to the invoking user before the rename; if it cannot, a warning goes to warn.
+func writePrivateFile(path string, data []byte, warn io.Writer) error {
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}
 	_, err = f.Write(data)
+	if err == nil {
+		if chownErr := chownToSudoUser(f); chownErr != nil {
+			fmt.Fprintf(warn, "Warning: could not restore ownership of %s: %v\n", path, chownErr)
+		}
+	}
 	closeErr := f.Close()
 	if err == nil {
 		err = closeErr
