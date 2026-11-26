@@ -50,10 +50,9 @@ type internetPassword struct {
 }
 
 type privateKey struct {
-	Name string `json:"name,omitempty"`
 	blobText
 	PrintName string `json:"print_name,omitempty"`
-	Label     string `json:"label,omitempty"`
+	LabelHex  string `json:"label_hex,omitempty"`
 	KeyClass  uint32 `json:"key_class,omitempty"`
 	KeyType   uint32 `json:"key_type,omitempty"`
 	KeySize   uint32 `json:"key_size,omitempty"`
@@ -149,10 +148,9 @@ func newInternetPassword(p *keychainbreaker.InternetPassword) internetPassword {
 
 func newPrivateKey(k *keychainbreaker.PrivateKey) privateKey {
 	return privateKey{
-		Name:      k.Name,
 		blobText:  newBlobText(k.Data),
 		PrintName: k.PrintName,
-		Label:     k.Label,
+		LabelHex:  hex.EncodeToString(k.Label),
 		KeyClass:  k.KeyClass,
 		KeyType:   k.KeyType,
 		KeySize:   k.KeySize,

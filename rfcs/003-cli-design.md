@@ -53,11 +53,11 @@ Each flag belongs to the commands that use it:
 
 `dump` unlocks with the credential it is given:
 
-1. `--key`: `TryUnlock(WithKey(...))`
-2. `--password` or `--password-stdin` (one trailing line ending is trimmed): `TryUnlock(WithPassword(...))`
+1. `--key`: hex-decoded (a `0x` prefix is accepted), then `UnlockWithKey`
+2. `--password` or `--password-stdin` (one trailing line ending is trimmed): `UnlockWithPassword`
 3. Neither: a `golang.org/x/term` prompt, only when stdin is a terminal. Without a terminal the command fails and names `--password-stdin` and `--key`. Ctrl-C at the prompt restores terminal echo before exiting.
 
-A wrong key or password (`ErrWrongKey`), and a v2 keychain that a password cannot unlock offline (`ErrUnsupportedBlobVersion`), print a warning and continue with a metadata-only export. Any other error fails the command. `hash` never unlocks.
+A wrong key or password (`ErrWrongKey`), and a v2 keychain that a password cannot unlock offline (`ErrUnsupportedBlobVersion`), print a warning and continue with a metadata-only export: a locked keychain still returns every record's metadata. Any other error, such as a `--key` that is not 24 bytes of hex, fails the command. `hash` never unlocks.
 
 ## 3. JSON Output
 
@@ -92,6 +92,7 @@ Each password appears three ways (`password`, `hex_password`, `base64_password`)
       "base64_password": "cGFzc3dvcmQjMTIz",
       "security_domain": "moond4rk.com",
       "protocol": "htps",
+      "auth_type": "dflt",
       "port": 443,
       "path": "/login",
       "print_name": "moond4rk.com"
@@ -102,6 +103,7 @@ Each password appears three ways (`password`, `hex_password`, `base64_password`)
       "data_hex": "308204bd0201...",
       "data_base64": "MIIEvQIBADAN...",
       "print_name": "93B7C5C0",
+      "label_hex": "57b87b23be287c9b51cc3f9283a4466dcbe4eb93",
       "key_class": 16,
       "key_type": 42,
       "key_size": 2048

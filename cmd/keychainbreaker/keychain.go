@@ -1,13 +1,13 @@
 package main
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -18,29 +18,20 @@ import (
 
 const fileFlagUsage = "keychain file (default ~/Library/Keychains/login.keychain-db)"
 
-func keychainPath(file string) (string, error) {
-	if file != "" {
-		return file, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("locate the login keychain: %w", err)
-	}
-	return filepath.Join(home, "Library", "Keychains", "login.keychain-db"), nil
-}
-
-func openKeychain(cmd *cobra.Command, root *rootOptions, file string) (*keychainbreaker.Keychain, error) {
-	path, err := keychainPath(file)
-	if err != nil {
-		return nil, err
+func openKeychain(cmd *cobra.Command, root *rootOptions, path string) (*keychainbreaker.Keychain, error) {
+	if path == "" {
+		var err error
+		if path, err = keychainbreaker.DefaultKeychainPath(); err != nil {
+			return nil, err
+		}
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Keychain: %s\n", path)
 
-	opts := []keychainbreaker.OpenOption{keychainbreaker.WithFile(path)}
+	var opts []keychainbreaker.Option
 	if root.verbose {
 		opts = append(opts, keychainbreaker.WithLogger(newLogger(cmd.ErrOrStderr())))
 	}
-	return keychainbreaker.Open(opts...)
+	return keychainbreaker.Open(path, opts...)
 }
 
 func newLogger(w io.Writer) *slog.Logger {
@@ -70,34 +61,34 @@ func (c *credentials) addFlags(cmd *cobra.Command) {
 	cmd.MarkFlagsMutuallyExclusive("password", "password-stdin", "key")
 }
 
-func (c *credentials) unlockOption(cmd *cobra.Command) (keychainbreaker.UnlockOption, error) {
+func (c *credentials) unlock(cmd *cobra.Command, kc *keychainbreaker.Keychain) error {
 	switch {
 	case cmd.Flags().Changed("key"):
-		return keychainbreaker.WithKey(c.key), nil
+		key, err := hex.DecodeString(strings.TrimPrefix(strings.TrimSpace(c.key), "0x"))
+		if err != nil {
+			return fmt.Errorf("decode --key: %w", err)
+		}
+		return kc.UnlockWithKey(key)
 	case cmd.Flags().Changed("password"):
-		return keychainbreaker.WithPassword(c.password), nil
+		return kc.UnlockWithPassword(c.password)
 	case c.passwordStdin:
 		password, err := readPassword(cmd.InOrStdin())
 		if err != nil {
-			return nil, err
+			return err
 		}
-		return keychainbreaker.WithPassword(password), nil
+		return kc.UnlockWithPassword(password)
 	default:
 		password, err := promptPassword(cmd)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		return keychainbreaker.WithPassword(password), nil
+		return kc.UnlockWithPassword(password)
 	}
 }
 
 // unlock leaves the keychain locked rather than failing on a wrong or unusable credential, so metadata still exports.
 func unlock(cmd *cobra.Command, kc *keychainbreaker.Keychain, creds *credentials) error {
-	opt, err := creds.unlockOption(cmd)
-	if err != nil {
-		return err
-	}
-	err = kc.TryUnlock(opt)
+	err := creds.unlock(cmd, kc)
 	switch {
 	case err == nil:
 		return nil

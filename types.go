@@ -2,72 +2,64 @@ package keychainbreaker
 
 import "time"
 
-// GenericPassword represents a generic password record.
+// GenericPassword is an application password, such as a browser's Safe Storage key or a Wi-Fi password.
 type GenericPassword struct {
-	Service        string    `json:"service,omitempty"`
-	Account        string    `json:"account,omitempty"`
-	Password       []byte    `json:"-"`
-	PlainPassword  string    `json:"password,omitempty"` //nolint:gosec // intentional credential export
-	HexPassword    string    `json:"hex_password,omitempty"`
-	Base64Password string    `json:"base64_password,omitempty"`
-	Description    string    `json:"description,omitempty"`
-	Comment        string    `json:"comment,omitempty"`
-	Creator        string    `json:"creator,omitempty"`
-	Type           string    `json:"type,omitempty"`
-	PrintName      string    `json:"print_name,omitempty"`
-	Alias          string    `json:"alias,omitempty"`
-	Created        time.Time `json:"created_at,omitempty"`
-	Modified       time.Time `json:"modified_at,omitempty"`
+	Service string
+	Account string
+	// Password is nil while the keychain is locked and when the record cannot be decrypted. An empty password is an
+	// empty, non-nil slice.
+	Password    []byte
+	Description string
+	Comment     string
+	Creator     string // four-character code
+	Type        string // four-character code
+	PrintName   string
+	Alias       string
+	Created     time.Time
+	Modified    time.Time
 }
 
-// InternetPassword represents an internet password record.
+// InternetPassword is a password for a network service, such as a website, a server or a file share.
 type InternetPassword struct {
-	Server         string    `json:"server,omitempty"`
-	Account        string    `json:"account,omitempty"`
-	Password       []byte    `json:"-"`
-	PlainPassword  string    `json:"password,omitempty"` //nolint:gosec // intentional credential export
-	HexPassword    string    `json:"hex_password,omitempty"`
-	Base64Password string    `json:"base64_password,omitempty"`
-	SecurityDomain string    `json:"security_domain,omitempty"`
-	Protocol       string    `json:"protocol,omitempty"`
-	AuthType       string    `json:"auth_type,omitempty"`
-	Port           uint32    `json:"port,omitempty"`
-	Path           string    `json:"path,omitempty"`
-	Description    string    `json:"description,omitempty"`
-	Comment        string    `json:"comment,omitempty"`
-	Creator        string    `json:"creator,omitempty"`
-	Type           string    `json:"type,omitempty"`
-	PrintName      string    `json:"print_name,omitempty"`
-	Alias          string    `json:"alias,omitempty"`
-	Created        time.Time `json:"created_at,omitempty"`
-	Modified       time.Time `json:"modified_at,omitempty"`
+	Server  string
+	Account string
+	// Password is nil while the keychain is locked and when the record cannot be decrypted. An empty password is an
+	// empty, non-nil slice.
+	Password       []byte
+	SecurityDomain string
+	Protocol       string // four-character code, such as "htps" or "smb "
+	AuthType       string // four-character code, such as "dflt"
+	Port           uint32
+	Path           string
+	Description    string
+	Comment        string
+	Creator        string // four-character code
+	Type           string // four-character code
+	PrintName      string
+	Alias          string
+	Created        time.Time
+	Modified       time.Time
 }
 
-// PrivateKey represents a private key record.
+// PrivateKey is a private key stored in the keychain.
 type PrivateKey struct {
-	Name       string `json:"name,omitempty"`
-	Data       []byte `json:"-"`
-	DataHex    string `json:"data_hex,omitempty"`
-	DataBase64 string `json:"data_base64,omitempty"`
-	PrintName  string `json:"print_name,omitempty"`
-	Label      string `json:"label,omitempty"`
-	KeyClass   uint32 `json:"key_class,omitempty"`
-	KeyType    uint32 `json:"key_type,omitempty"`
-	KeySize    uint32 `json:"key_size,omitempty"`
+	// Data is the PKCS#8 key; it is nil while the keychain is locked and when the record cannot be decrypted.
+	Data      []byte
+	PrintName string
+	Label     []byte // usually the SHA-1 hash of the public key
+	KeyClass  uint32
+	KeyType   uint32
+	KeySize   uint32 // in bits
 }
 
-// Certificate represents an X.509 certificate record.
+// Certificate is an X.509 certificate. Certificates are not encrypted, so they are complete even while the
+// keychain is locked.
 type Certificate struct {
-	Data       []byte `json:"-"`
-	DataHex    string `json:"data_hex,omitempty"`
-	DataBase64 string `json:"data_base64,omitempty"`
-	Type       uint32 `json:"type,omitempty"`
-	Encoding   uint32 `json:"encoding,omitempty"`
-	PrintName  string `json:"print_name,omitempty"`
-	Subject    []byte `json:"-"`
-	SubjectHex string `json:"subject_hex,omitempty"`
-	Issuer     []byte `json:"-"`
-	IssuerHex  string `json:"issuer_hex,omitempty"`
-	Serial     []byte `json:"-"`
-	SerialHex  string `json:"serial_hex,omitempty"`
+	Data      []byte // DER-encoded certificate
+	Type      uint32
+	Encoding  uint32
+	PrintName string
+	Subject   []byte // DER-encoded subject name
+	Issuer    []byte // DER-encoded issuer name
+	Serial    []byte
 }

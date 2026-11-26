@@ -1,161 +1,209 @@
 package keychainbreaker
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"time"
 )
 
-// Attribute format constants from Apple's CSSM framework.
+// Attribute formats (CSSM_DB_ATTRIBUTE_FORMAT).
 const (
-	attrFormatString    = 0
-	attrFormatSInt32    = 1
-	attrFormatUInt32    = 2
-	attrFormatTimeDate  = 5
-	attrFormatBlob      = 6
-	attrFormatMultiUInt = 7
+	formatString   uint32 = 0
+	formatSInt32   uint32 = 1
+	formatUInt32   uint32 = 2
+	formatTimeDate uint32 = 5
+	formatBlob     uint32 = 6
 )
 
-// attrDef describes a single attribute in a table schema.
+// Attribute names. Most are four-character codes; PrintName, Alias and the key attributes are names.
+const (
+	attrService        = "svce"
+	attrAccount        = "acct"
+	attrDescription    = "desc"
+	attrComment        = "icmt"
+	attrCreator        = "crtr"
+	attrType           = "type"
+	attrPrintName      = "PrintName"
+	attrAlias          = "Alias"
+	attrCreated        = "cdat"
+	attrModified       = "mdat"
+	attrServer         = "srvr"
+	attrSecurityDomain = "sdmn"
+	attrProtocol       = "ptcl"
+	attrAuthType       = "atyp"
+	attrPort           = "port"
+	attrPath           = "path"
+	attrLabel          = "Label"
+	attrKeyClass       = "KeyClass"
+	attrKeyType        = "KeyType"
+	attrKeySizeInBits  = "KeySizeInBits"
+	attrCertType       = "ctyp"
+	attrCertEncoding   = "cenc"
+	attrCertLabel      = "labl" // the certificate table's print name
+	attrSubject        = "subj"
+	attrIssuer         = "issu"
+	attrSerial         = "snbr"
+)
+
 type attrDef struct {
-	name   string // 4-char code like "svce", "acct", or descriptive name
-	format uint32 // one of attrFormat* constants
+	name   string
+	format uint32
 }
 
-// tableSchema describes the attributes for a specific table type.
+// tableSchema lists a table's attributes in record order. It is immutable once built, so records of any keychain
+// can share it across goroutines.
 type tableSchema struct {
-	tableID  uint32
-	attrs    []attrDef
-	indexMap map[string]int // name -> index cache, built lazily
+	attrs []attrDef
+	index map[string]int
 }
 
-// attrIndex returns the index of the named attribute, or -1 if not found.
-func (ts *tableSchema) attrIndex(name string) int {
-	if ts.indexMap == nil {
-		ts.indexMap = make(map[string]int, len(ts.attrs))
-		for i, a := range ts.attrs {
-			ts.indexMap[a.name] = i
-		}
+func newTableSchema(attrs []attrDef) *tableSchema {
+	index := make(map[string]int, len(attrs))
+	for i, a := range attrs {
+		index[a.name] = i
 	}
-	idx, ok := ts.indexMap[name]
+	return &tableSchema{attrs: attrs, index: index}
+}
+
+// schemaAttributesSchema describes the SchemaAttributes table, which holds the schema of every other table.
+var schemaAttributesSchema = newTableSchema([]attrDef{
+	{name: "RelationID", format: formatUInt32},
+	{name: "AttributeID", format: formatUInt32},
+	{name: "AttributeNameFormat", format: formatUInt32},
+	{name: "AttributeName", format: formatString},
+	{name: "AttributeNameID", format: formatBlob},
+	{name: "AttributeFormat", format: formatUInt32},
+})
+
+// attachSchemas reads the SchemaAttributes table and gives every table the schema of its records.
+func attachSchemas(buf []byte, tables map[uint32]*table) error {
+	meta, ok := tables[tableSchemaAttributes]
 	if !ok {
-		return -1
+		return fmt.Errorf("SchemaAttributes table (0x%08X) not found", tableSchemaAttributes)
 	}
-	return idx
-}
+	meta.schema = schemaAttributesSchema
 
-// dbSchema holds schemas for all discovered tables.
-type dbSchema struct {
-	tables map[uint32]*tableSchema
-}
-
-func (ds *dbSchema) forTable(tableID uint32) *tableSchema {
-	if ds == nil {
-		return nil
-	}
-	return ds.tables[tableID]
-}
-
-// Bootstrap schemas for SchemaInfo and SchemaAttributes.
-// These two tables must be parsed with hardcoded schemas because they are
-// needed to discover the schemas of all other tables.
-
-var schemaInfoBootstrap = &tableSchema{
-	tableID: tableSchemaInfo,
-	attrs: []attrDef{
-		{name: "RelationID", format: attrFormatUInt32},
-		{name: "AttributeNameFormat", format: attrFormatUInt32},
-		{name: "AttributeID", format: attrFormatUInt32},
-		{name: "AttributeNameID", format: attrFormatUInt32},
-	},
-}
-
-var schemaAttributesBootstrap = &tableSchema{
-	tableID: tableSchemaAttributes,
-	attrs: []attrDef{
-		{name: "RelationID", format: attrFormatUInt32},
-		{name: "AttributeID", format: attrFormatUInt32},
-		{name: "AttributeNameFormat", format: attrFormatUInt32},
-		{name: "AttributeNameID", format: attrFormatUInt32},
-		{name: "AttributeFormat", format: attrFormatUInt32},
-	},
-}
-
-// buildSchema reads SchemaAttributes records to discover the schema for all tables.
-func buildSchema(buf []byte, tables map[uint32]*tableInfo) (*dbSchema, error) {
-	ds := &dbSchema{
-		tables: map[uint32]*tableSchema{
-			tableSchemaInfo:       schemaInfoBootstrap,
-			tableSchemaAttributes: schemaAttributesBootstrap,
-		},
-	}
-
-	saTable, ok := tables[tableSchemaAttributes]
-	if !ok {
-		return nil, fmt.Errorf("SchemaAttributes table (0x%08X) not found", tableSchemaAttributes)
-	}
-
-	// Collect attribute definitions grouped by RelationID.
-	attrsByTable := make(map[uint32][]attrDef)
-
-	for _, recOffset := range saTable.recordOffsets {
-		absOffset := saTable.baseOffset + int(recOffset)
-		rec, err := parseRecord(buf, absOffset, schemaAttributesBootstrap)
+	attrs := make(map[uint32][]attrDef)
+	for _, off := range meta.recordOffsets {
+		rec, err := parseRecord(buf, meta.offset+int(off), meta.schema)
 		if err != nil {
 			continue
 		}
-
-		relationID := rec.uint32Attr("RelationID")
-		if relationID == 0 {
+		relation := rec.uint32Attr("RelationID")
+		if relation == tableSchemaInfo {
 			continue
 		}
-
-		attrFormat := rec.uint32Attr("AttributeFormat")
-
-		// Use AttributeID as the attribute name. In Apple's CSSM,
-		// AttributeID is typically a 4-char code (e.g. 0x73766365 = "svce").
-		attrID := rec.uint32Attr("AttributeID")
-		name := uint32ToFourCC(attrID)
-
-		// If FourCC is not printable, try AttributeNameID as a string.
-		if !isPrintableFourCC(name) {
-			name = rec.stringAttr("AttributeNameID")
-		}
-		if name == "" || name == "\x00\x00\x00\x00" {
-			name = fmt.Sprintf("attr_0x%08x", attrID)
-		}
-
-		attrsByTable[relationID] = append(attrsByTable[relationID], attrDef{
-			name:   name,
-			format: attrFormat,
+		attrs[relation] = append(attrs[relation], attrDef{
+			name:   attrName(rec),
+			format: rec.uint32Attr("AttributeFormat"),
 		})
 	}
-
-	for tableID, attrs := range attrsByTable {
-		ds.tables[tableID] = &tableSchema{
-			tableID: tableID,
-			attrs:   attrs,
+	for id, defs := range attrs {
+		if t, ok := tables[id]; ok {
+			t.schema = newTableSchema(defs)
 		}
 	}
-
-	return ds, nil
+	return nil
 }
 
-// uint32ToFourCC converts a uint32 to a 4-character string.
-func uint32ToFourCC(v uint32) string {
-	b := make([]byte, 4)
-	binary.BigEndian.PutUint32(b, v)
-	return string(b)
-}
-
-// isPrintableFourCC returns true if all 4 bytes are printable ASCII.
-func isPrintableFourCC(s string) bool {
-	if len(s) != 4 {
-		return false
+// attrName prefers the four-character code in AttributeID and falls back to the AttributeName string.
+func attrName(rec *record) string {
+	id := rec.uint32Attr("AttributeID")
+	if code := fourCC(id); isPrintable(code) {
+		return code
 	}
-	for i := 0; i < 4; i++ {
+	if name := rec.textAttr("AttributeName"); name != "" {
+		return name
+	}
+	return fmt.Sprintf("attr_0x%08x", id)
+}
+
+func fourCC(v uint32) string {
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], v)
+	return string(b[:])
+}
+
+func isPrintable(s string) bool {
+	for i := 0; i < len(s); i++ {
 		if s[i] < 0x20 || s[i] > 0x7E {
 			return false
 		}
 	}
-	return true
+	return s != ""
+}
+
+// attr returns the schema entry of the named attribute and the offset of its value in the record.
+func (r *record) attr(name string) (attrDef, int, bool) {
+	i, ok := r.schema.index[name]
+	if !ok || i >= len(r.attrOffsets) || r.attrOffsets[i] == 0 {
+		return attrDef{}, 0, false
+	}
+	return r.schema.attrs[i], int(r.attrOffsets[i]) - 1, true
+}
+
+// lengthPrefixed returns the value of a string or blob attribute, which is stored after its length.
+func (r *record) lengthPrefixed(pos int) []byte {
+	n, ok := readUint32(r.buf, pos)
+	if !ok {
+		return nil
+	}
+	b, _ := span(r.buf, pos+uint32Len, int(n))
+	return b
+}
+
+// bytesAttr returns a copy of a string or blob attribute, or nil when the record has none.
+func (r *record) bytesAttr(name string) []byte {
+	def, pos, ok := r.attr(name)
+	if !ok || (def.format != formatString && def.format != formatBlob) {
+		return nil
+	}
+	b := r.lengthPrefixed(pos)
+	if len(b) == 0 {
+		return nil
+	}
+	return bytes.Clone(b)
+}
+
+// textAttr returns a string or blob attribute as text, or an integer attribute as its four-character code.
+func (r *record) textAttr(name string) string {
+	def, pos, ok := r.attr(name)
+	if !ok {
+		return ""
+	}
+	var b []byte
+	switch def.format {
+	case formatString, formatBlob:
+		b = r.lengthPrefixed(pos)
+	case formatUInt32, formatSInt32:
+		b, _ = span(r.buf, pos, uint32Len)
+	}
+	return string(bytes.TrimRight(b, "\x00"))
+}
+
+func (r *record) uint32Attr(name string) uint32 {
+	def, pos, ok := r.attr(name)
+	if !ok || (def.format != formatUInt32 && def.format != formatSInt32) {
+		return 0
+	}
+	v, _ := readUint32(r.buf, pos)
+	return v
+}
+
+// timeAttr parses a TimeDate attribute, stored as "YYYYMMDDhhmmssZ" and padded with NUL bytes.
+func (r *record) timeAttr(name string) time.Time {
+	def, pos, ok := r.attr(name)
+	if !ok || def.format != formatTimeDate {
+		return time.Time{}
+	}
+	b, ok := span(r.buf, pos, timeDateLen)
+	if !ok {
+		return time.Time{}
+	}
+	t, err := time.Parse("20060102150405Z", string(bytes.TrimRight(b, "\x00")))
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
