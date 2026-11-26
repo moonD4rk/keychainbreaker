@@ -45,19 +45,20 @@ Each flag belongs to the commands that use it:
 | `-p, --password` | dump | Keychain password; other local users can see it |
 | `--password-stdin` | dump | Read the password from stdin |
 | `-k, --key` | dump | Hex-encoded 24-byte master key |
+| `--entropy` | dump | Entropy file for a macOS 26.4+ login keychain; default auto from `/var/db/SystemKeys` |
 | `-o, --output` | dump | Output file, or `-` for stdout; default `keychain_dump.json` |
 
-`--password`, `--password-stdin` and `--key` are mutually exclusive.
+`--password`, `--password-stdin` and `--key` are mutually exclusive, as are `--key` and `--entropy` (entropy combines with a password, not a key).
 
 ### Unlock Flow
 
 `dump` unlocks with the credential it is given:
 
 1. `--key`: hex-decoded (a `0x` prefix is accepted), then `UnlockWithKey`
-2. `--password` or `--password-stdin` (one trailing line ending is trimmed): `UnlockWithPassword`
-3. Neither: a `golang.org/x/term` prompt, only when stdin is a terminal. Without a terminal the command fails and names `--password-stdin` and `--key`. Ctrl-C at the prompt restores terminal echo before exiting.
+2. Otherwise a password: `--password` or `--password-stdin` (one trailing line ending is trimmed), else a `golang.org/x/term` prompt, only when stdin is a terminal. Without a terminal the command fails and names `--password-stdin` and `--key`. Ctrl-C at the prompt restores terminal echo before exiting.
+3. The password path then handles the macOS 26.4+ entropy file: `--entropy <file>` is used directly via `UnlockWithEntropy`; with no flag the password is tried alone first, and only on `ErrWrongKey` does the CLI read `EntropyPath()` (`/var/db/SystemKeys/<salt>`, root-only and SIP-protected) and retry with entropy. A missing entropy file leaves the original wrong-password error; an unreadable one explains that root and SIP-off, or `--entropy`, are needed.
 
-A wrong key or password (`ErrWrongKey`), and a v2 keychain that a password cannot unlock offline (`ErrUnsupportedBlobVersion`), print a warning and continue with a metadata-only export: a locked keychain still returns every record's metadata. Any other error, such as a `--key` that is not 24 bytes of hex, fails the command. `hash` never unlocks.
+A wrong key or password (`ErrWrongKey`) prints a warning and continues with a metadata-only export: a locked keychain still returns every record's metadata. Any other error, such as a `--key` that is not 24 bytes of hex or an unreadable `--entropy` file, fails the command. `hash` never unlocks.
 
 ## 3. JSON Output
 

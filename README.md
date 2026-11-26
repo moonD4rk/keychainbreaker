@@ -61,6 +61,7 @@ Every command reads `~/Library/Keychains/login.keychain-db` unless `-f/--file` n
 Export generic and internet passwords, private keys and certificates to JSON. Each password appears three ways (`password`, `hex_password`, `base64_password`) because a secret need not be valid text; key and certificate data appear as hex and base64.
 
 ```
+    --entropy string    entropy file for a macOS 26.4+ login keychain (default: auto from /var/db/SystemKeys)
 -f, --file string       keychain file (default ~/Library/Keychains/login.keychain-db)
 -k, --key string        hex-encoded 24-byte master key, used instead of the password
 -o, --output string     output file, or "-" for stdout (default "keychain_dump.json")
@@ -89,6 +90,10 @@ keychainbreaker dump --key <48-char-hex> -o - | jq '.generic_passwords[].service
 
 # Wrong password: still exports metadata (service, account, timestamps, certificates)
 keychainbreaker dump -p "wrong"
+
+# macOS 26.4+: read the entropy file automatically (root + SIP off), or supply one from a backup
+sudo keychainbreaker dump
+keychainbreaker dump --entropy ./SystemKeys/<SALT> --password-stdin < password.txt
 ```
 
 The output file is created with mode `0600` and replaced in one step, so the secrets are never readable by other users and an interrupted run leaves the previous file intact.
@@ -101,7 +106,7 @@ keychainbreaker hash
 # $keychain$*<salt_hex>*<iv_hex>*<ciphertext_hex>
 ```
 
-The format is accepted by hashcat (mode 23100) and John the Ripper.
+The format is accepted by hashcat (mode 23100) and John the Ripper. On a macOS 26.4+ login keychain the master key also depends on the per-machine entropy file, so no password recovers this hash; use `--key` or `--entropy` instead.
 
 ## Go Library
 
@@ -147,17 +152,41 @@ kc, err := keychainbreaker.Open(path, keychainbreaker.WithLogger(logger)) // dia
 ### Unlock
 
 ```go
-err := kc.UnlockWithPassword("macos-login-password") // derives the master key with PBKDF2-HMAC-SHA1
-err := kc.UnlockWithKey(masterKey)                   // the 24-byte master key itself
+err := kc.UnlockWithPassword("macos-login-password")   // derives the master key with PBKDF2-HMAC-SHA1
+err := kc.UnlockWithEntropy("macos-login-password", e)  // macOS 26.4+: folds in a per-machine entropy file
+err := kc.UnlockWithKey(masterKey)                      // the 24-byte master key itself
 ```
 
-Both return `ErrWrongKey` for a wrong credential. A failed attempt leaves the keychain as it was, so another credential can be tried; `kc.Unlocked()` reports whether one succeeded.
+All return `ErrWrongKey` for a wrong credential. A failed attempt leaves the keychain as it was, so another credential can be tried; `kc.Unlocked()` reports whether one succeeded.
 
-> **macOS 26.4+ (login keychain v2):** freshly re-keyed login keychains report blob version `0x200`. Offline password unlock no longer works for them: `UnlockWithPassword` returns `ErrUnsupportedBlobVersion` instead of a misleading "wrong password" error. Recover the 24-byte master key on the originating machine and use `UnlockWithKey`. Version 1 (`0x100`) keychains are unaffected.
+> **macOS 26.4+ (login keychain):** since Tahoe 26.4, the login keychain is protected by a per-machine 32-byte entropy file in `/var/db/SystemKeys/` in addition to the password. The master key is derived from `HMAC-SHA256(entropy, password)`, so the password alone no longer unlocks it and `UnlockWithPassword` returns `ErrWrongKey`. The blob version (`0x200`) is unrelated — it means partition support and has since OS X 10.11.4. Apple documents the file in [Technical Note TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains); its name, location and format are explicitly not an API.
 
-### Recover the master key on macOS 26.4+ (v2)
+### Unlock a macOS 26.4+ login keychain
 
-A v2 keychain can't be decrypted offline from the file and password alone, but its 24-byte master key can be captured on the **machine that created it** and then replayed offline with `UnlockWithKey` / `--key`. `securityd` still derives that key through `CSSM_DeriveKey`, so an lldb breakpoint on the running daemon exposes it.
+You need the entropy file. It is 32 random bytes stored in `/var/db/SystemKeys/<SALT>`, named by the keychain's salt. The directory is readable only by root and only while [SIP is disabled](https://developer.apple.com/documentation/security/disabling-and-enabling-system-integrity-protection); Time Machine and Migration Assistant copy it with the keychain.
+
+```go
+kc, _ := keychainbreaker.Open(path)
+data, err := os.ReadFile(kc.EntropyPath()) // /var/db/SystemKeys/<SALT>; needs root + SIP off
+if err != nil {
+    return err
+}
+entropy, err := keychainbreaker.DecodeEntropy(data) // parses the XML plist, returns the 32 bytes
+if err != nil {
+    return err
+}
+err = kc.UnlockWithEntropy("macos-login-password", entropy)
+```
+
+The CLI does this for you: run `keychainbreaker dump` as root with SIP disabled and it reads the entropy file automatically, or pass `--entropy <file>` to supply one (for example from a backup):
+
+```bash
+sudo keychainbreaker dump
+```
+
+### Recover the master key by capturing it in securityd
+
+As an alternative to the entropy file, the 24-byte master key can be captured on the **machine that created the keychain** and replayed offline with `UnlockWithKey` / `--key`, which needs no entropy file. `securityd` derives that key through `CSSM_DeriveKey`, so an lldb breakpoint on the running daemon exposes it.
 
 Requirements: macOS 26.4+ on **Apple Silicon**, an admin account, the login password, and [SIP temporarily disabled](https://developer.apple.com/documentation/security/disabling-and-enabling-system-integrity-protection) (re-enable it as soon as you're done).
 
@@ -314,7 +343,7 @@ macOS Keychain uses a three-layer encryption scheme:
 Password --> PBKDF2 --> Master Key --> DB Key --> Per-Record Keys --> Plaintext
 ```
 
-1. **Master key** derived from password via PBKDF2-HMAC-SHA1
+1. **Master key** derived from password via PBKDF2-HMAC-SHA1 (macOS 26.4+ first folds the password into a per-machine entropy file with `HMAC-SHA256`)
 2. **Database key** decrypted from the keychain's metadata blob
 3. **Per-record keys** unwrapped using RFC 3217 Triple-DES Key Wrap
 4. **Passwords/keys** decrypted using per-record keys with 3DES-CBC

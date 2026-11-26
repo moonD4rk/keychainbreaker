@@ -116,13 +116,6 @@ func TestPasswordHash(t *testing.T) {
 		hash)
 }
 
-func TestPasswordHashRejectsV2(t *testing.T) {
-	kc := openTestKeychain(t)
-	kc.dbBlob.version = blobVersionV2
-	_, err := kc.PasswordHash()
-	assert.ErrorIs(t, err, ErrUnsupportedBlobVersion)
-}
-
 func TestDefaultKeychainPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
